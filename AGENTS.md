@@ -34,6 +34,8 @@ dotnet publish -c Release -r win-x64 --self-contained \
 MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --preview
 # 热键录制窗预览
 MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --hotkey-dialog
+# 预填搜索词（排查搜索/排版问题；建议配合 --preview）
+MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --preview --query docker
 
 # 截图窗口（PrintWindow 直出 PNG，不依赖窗口是否在最前）
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/shot.ps1 -Out C:\temp\shot.png
@@ -91,7 +93,9 @@ MiniLaunch/src/
 11. **占位提示需要 `app.manifest` 里的 comctl32 v6**；没有清单则 `EM_SETCUEBANNER` 静默失效，菜单也是老样式。
 12. **`Theme.FillRoundSolid/Gradient` 的参数是圆角半径**（内部 ×2 传给 `CreateRoundRectRgn`）。
 13. **搜索框的 EDIT 用「缩进」避开圆角**：EDIT 是方形区域，靠 `SetWindowRgn` 在 PrintWindow 下不可靠，所以横向内缩 14px 落在圆角矩形直边内。
-14. **截图验证**：`PrintWindow` 用 flag `2`（PW_RENDERFULLCONTENT）会把遮挡窗口一起拍进来；本仓库用 flag `0` 只渲染自身。`FindWindowW` 在本机某些进程里查不到类名窗口，脚本一律用 `EnumWindows` 按类名找。
+14. **截图验证**：`PrintWindow` 用 flag `2`（PW_RENDERFULLCONTENT）会把遮挡窗口一起拍进来；本仓库用 flag `0` 只渲染自身。`FindWindowW` 在本机某些进程里查不到类名窗口，脚本一律用 `EnumWindows` 按类名找。另外 `PrintWindow` 抓原生 `EDIT` 子控件时偶发空白（同一状态重拍就好），所以截图判读搜索框文字时要多拍几次再下结论。
+15. **W 版 API 必须写 `CharSet = CharSet.Unicode`**：漏了它，`StringBuilder` 会按 ANSI/GBK 解码 UTF-16 字节流，`"docker"` 会读成 `"d"`（表现为「只能按首字母搜索」）。新增任何带 `string`/`StringBuilder` 的 `DllImport` 都要检查这一点。
+16. **单行 `EDIT` 的文字贴客户区顶部**：`EM_SETRECT(NP)` 只对多行控件生效，要垂直居中只能把控件本身按行高摆好（见 `LayoutEdit`）。
 
 ## UI 结构（MainWindow）
 

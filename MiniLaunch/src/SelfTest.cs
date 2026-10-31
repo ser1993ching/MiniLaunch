@@ -170,5 +170,20 @@ public static class SelfTest
         var full = EntryMerger.Merge(Scanners.ScanCustom(cfg2), sm, reg, new());
         Check(full.Count >= 10, "合并后总条目数量合理", $"count={full.Count}");
         Check(full.All(e => e.HayLower.Length > 0 && e.UniqueKey.Length > 0), "条目检索字段已构建");
+
+        // ---- 11. 文本封送：GetWindowTextW 必须走 Unicode ----
+        // 回归防护：漏 CharSet.Unicode 时 "docker" 会被读成 "d"（只能按首字母搜索）
+        IntPtr he = Win32.CreateWindowExW(0, "EDIT", "", Win32.WS_POPUP, 0, 0, 200, 40,
+            IntPtr.Zero, IntPtr.Zero, Win32.GetModuleHandleW(null), IntPtr.Zero);
+        if (he != IntPtr.Zero)
+        {
+            const string sample = "docker 微信";
+            Win32.SetWindowTextW(he, sample);
+            var tsb = new StringBuilder(256);
+            Win32.GetWindowTextW(he, tsb, 256);
+            Check(tsb.ToString() == sample, "GetWindowTextW 多字符不被截断", $"读回“{tsb}”");
+            Win32.DestroyWindow(he);
+        }
+        else Check(false, "创建 EDIT 用于文本封送回归", "CreateWindowExW 失败");
     }
 }

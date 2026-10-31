@@ -315,7 +315,10 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern void PostQuitMessage(int nExitCode);
 
-    [DllImport("user32.dll")]
+    // 注意：这是 W 版接口，必须显式 CharSet.Unicode。
+    // 少了它，StringBuilder 会按 ANSI 解 UTF-16 字节流——中文字符串直接变空，
+    // 英文也只剩第一个字母（"docker" → "d"），表现为「只能按首字母搜索」。
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern int GetWindowTextW(IntPtr hWnd, [Out] StringBuilder lpString, int nMaxCount);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -464,6 +467,7 @@ internal static class Win32
     public const int CS_DROPSHADOW = 0x00020000;
     public const int EM_SETCUEBANNER = 0x1501;
     public const int EM_SETMARGINS = 0xD3;
+    public const int EM_SETSEL = 0xB1;
     public const int EC_LEFTMARGIN = 0x1, EC_RIGHTMARGIN = 0x2;
     public const uint DT_CENTER = 0x1, DT_RIGHT = 0x2, DT_CALCRECT = 0x400;
     public const uint SWP_SHOWWINDOW = 0x40;

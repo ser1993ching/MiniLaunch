@@ -70,6 +70,10 @@ public static class Program
             _win.PreviewMode = true;
             _win.ShowWin();
         }
+        // 预填搜索词（调试用）：--query docker --preview
+        int qi = Array.IndexOf(args, "--query");
+        if (qi >= 0 && qi + 1 < args.Length)
+            _win.SetQuery(args[qi + 1]);
         if (args.Contains("--hotkey-dialog"))
         {
             _win.PreviewMode = true;

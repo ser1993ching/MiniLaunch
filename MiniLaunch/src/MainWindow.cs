@@ -138,6 +138,14 @@ public sealed class MainWindow
     }
 
     // ================= 查询 =================
+    /// <summary>调试/预览用：直接设入搜索词（会触发 EN_CHANGE → Requery）。</summary>
+    public void SetQuery(string text)
+    {
+        if (_edit == IntPtr.Zero || string.IsNullOrEmpty(text)) return;
+        Win32.SetWindowTextW(_edit, text);
+        Win32.SendMessageW(_edit, Win32.EM_SETSEL, (IntPtr)text.Length, (IntPtr)text.Length);
+    }
+
     public void Requery()
     {
         var sb = new StringBuilder(512);
@@ -432,8 +440,12 @@ public sealed class MainWindow
     {
         if (_edit == IntPtr.Zero) return;
         var outer = SearchPill(_w);
-        int l = outer.L + Scale(14), t = outer.T + Scale(4);
-        int w = outer.Width - Scale(28), h = outer.Height - Scale(8);
+        int l = outer.L + Scale(14), w = outer.Width - Scale(28);
+        // 单行 EDIT 不支持 EM_SETRECT（那是多行控件的接口），只能把控件本身摆正：
+        // 文字在 EDIT 客户区里贴近顶部（约 3px），所以控件高度取行高、整体下移，
+        // 让文字的视觉中心落在胶囊中心上（否则文字会明显偏上）。
+        int h = Scale(30);
+        int t = (outer.T + outer.B) / 2 - Scale(13);
         Win32.MoveWindow(_edit, l, t, w, h, true);
         // 文本左右内边距
         int mg = Scale(12);
