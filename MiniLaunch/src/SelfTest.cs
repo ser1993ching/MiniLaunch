@@ -71,6 +71,20 @@ public static class SelfTest
         Check(o2 && m2 == (Win32.MOD_CONTROL | Win32.MOD_SHIFT) && v2 == 0x72, "热键解析 Ctrl+Shift+F3");
         Check(!HotkeyParser.Parse("乱码键").ok, "热键解析拒绝非法输入");
 
+        // ---- 1b. 默认热键 = Ctrl+Space，且可自定义（Format/Parse 往返）----
+        var def = new AppConfig();
+        Check(def.Hotkey == "Ctrl+Space", "默认热键为 Ctrl+Space", def.Hotkey);
+        var (dm, dv, dok) = HotkeyParser.Parse(def.Hotkey);
+        Check(dok && dm == Win32.MOD_CONTROL && dv == Win32.VK_SPACE, "默认热键解析为 Ctrl+Space",
+            $"mods={dm} vk={dv}");
+        Check(HotkeyParser.Format(dm, dv) == "Ctrl+Space", "热键格式化往返 Ctrl+Space",
+            HotkeyParser.Format(dm, dv));
+        var (cm, cv, cok) = HotkeyParser.Parse("Ctrl+Alt+F8");
+        Check(cok && HotkeyParser.Format(cm, cv) == "Ctrl+Alt+F8", "热键格式化往返 Ctrl+Alt+F8",
+            HotkeyParser.Format(cm, cv));
+        Check(HotkeyParser.IsModifierKey(Win32.VK_CONTROL) && !HotkeyParser.IsModifierKey(0x41),
+            "修饰键识别");
+
         // ---- 2. 配置原子读写回环 ----
         var cfg = new AppConfig
         {

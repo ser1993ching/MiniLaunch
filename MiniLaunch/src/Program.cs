@@ -56,12 +56,25 @@ public static class Program
         var (mods, vk, ok) = HotkeyParser.Parse(_cfg.Hotkey);
         bool hkOk = ok && Win32.RegisterHotKey(_win.Hwnd, 1, mods | Win32.MOD_NOREPEAT, vk);
         if (!hkOk)
-            Tray.Notify("热键注册失败", $"“{_cfg.Hotkey}”可能被其他程序占用，请修改配置文件后重启。");
+            Tray.Notify("热键注册失败", $"“{_cfg.Hotkey}”可能被其他程序占用，右键托盘图标可重新设置。");
 
         if (firstRun)
         {
             ConfigStore.SaveConfig(_cfg); // 首次运行即落盘默认配置，便于用户发现与编辑
             _win.ShowWin();
+        }
+
+        // 界面预览（截图/调试用）：不自动隐藏，也不抢前台以后就住
+        if (args.Contains("--preview"))
+        {
+            _win.PreviewMode = true;
+            _win.ShowWin();
+        }
+        if (args.Contains("--hotkey-dialog"))
+        {
+            _win.PreviewMode = true;
+            HotkeyDialog.PreviewMode = true;
+            ShowHotkeySettings();
         }
 
         AppDomain.CurrentDomain.ProcessExit += (s, e) => ConfigStore.SaveUsage(_usage);
@@ -215,6 +228,52 @@ public static class Program
         }
         catch { }
         ConfigStore.SaveConfig(_cfg);
+    }
+
+    // ================= 热键设置 =================
+    /// <summary>打开热键录制窗（录制期间先注销旧热键，避免自我干扰）。</summary>
+    public static void ShowHotkeySettings()
+    {
+        if (_win == null) return;
+        if (HotkeyDialog.IsOpen) { Win32.SetForegroundWindow(HotkeyDialog.InstanceHwnd); return; }
+        if (Win32.IsWindowVisible(_win.Hwnd)) _win.HideWin();
+        Win32.UnregisterHotKey(_win.Hwnd, 1);
+        HotkeyDialog.Show(TrySetHotkey, OnHotkeyDialogClosed);
+    }
+
+    /// <summary>尝试应用新热键；被占用则回滚旧热键并返回 false。</summary>
+    static bool TrySetHotkey(string text)
+    {
+        if (_win == null) return false;
+        var (mods, vk, ok) = HotkeyParser.Parse(text);
+        if (!ok) return false;
+        Win32.UnregisterHotKey(_win.Hwnd, 1);
+        if (!Win32.RegisterHotKey(_win.Hwnd, 1, mods | Win32.MOD_NOREPEAT, vk))
+        {
+            RegisterCurrentHotkey();
+            return false;
+        }
+        _cfg.Hotkey = text;
+        ConfigStore.SaveConfig(_cfg);
+        _win.RequestRepaint();
+        Tray.Notify("热键已更新", text);
+        return true;
+    }
+
+    static void OnHotkeyDialogClosed()
+    {
+        if (_win == null) return;
+        RegisterCurrentHotkey();
+        _win.RequestRepaint();
+    }
+
+    static void RegisterCurrentHotkey()
+    {
+        if (_win == null) return;
+        Win32.UnregisterHotKey(_win.Hwnd, 1);
+        var (mods, vk, ok) = HotkeyParser.Parse(_cfg.Hotkey);
+        if (ok) Win32.RegisterHotKey(_win.Hwnd, 1, mods | Win32.MOD_NOREPEAT, vk);
+        else Tray.Notify("热键配置无效", $"config.json 中的 \"{_cfg.Hotkey}\" 无法解析，请在托盘菜单重新设置。");
     }
 
     public static void OpenConfig()

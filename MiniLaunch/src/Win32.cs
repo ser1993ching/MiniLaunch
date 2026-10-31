@@ -279,7 +279,7 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
     public static readonly IntPtr HWND_TOPMOST = new(-1);
-    public const uint SWP_NOSIZE = 0x4, SWP_NOMOVE = 0x2, SWP_NOZORDER = 0x4, SWP_NOACTIVATE = 0x10;
+    public const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOZORDER = 0x4, SWP_NOACTIVATE = 0x10;
 
     [DllImport("user32.dll")]
     public static extern bool GetCursorPos(out POINT lpPoint);
@@ -447,4 +447,54 @@ internal static class Win32
     [DllImport("dwmapi.dll")]
     public static extern int DwmSetWindowAttribute(IntPtr hwnd, int dwAttribute, ref int pvAttribute, int cbAttribute);
     public const int DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUND = 2;
+    public const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+
+    // ===== 追加：按键状态 / 键名 =====
+    [DllImport("user32.dll")] public static extern short GetKeyState(int nVirtKey);
+    [DllImport("user32.dll")] public static extern uint MapVirtualKeyW(uint uCode, uint uMapType);
+    public const uint MAPVK_VK_TO_VSC = 0;
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetKeyNameTextW(int lParam, [Out] StringBuilder lpString, int nSize);
+
+    public const int VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12;
+    public const int VK_LWIN = 0x5B, VK_RWIN = 0x5C, VK_TAB = 0x09, VK_BACK = 0x08;
+    public const int VK_LEFT = 0x25, VK_RIGHT = 0x27;
+    public const int WM_KEYUP = 0x0101, WM_SYSKEYDOWN = 0x0104, WM_SYSKEYUP = 0x0105;
+    public const int WM_KILLFOCUS = 0x0008;
+    public const int CS_DROPSHADOW = 0x00020000;
+    public const int EM_SETCUEBANNER = 0x1501;
+    public const int EM_SETMARGINS = 0xD3;
+    public const int EC_LEFTMARGIN = 0x1, EC_RIGHTMARGIN = 0x2;
+    public const uint DT_CENTER = 0x1, DT_RIGHT = 0x2, DT_CALCRECT = 0x400;
+    public const uint SWP_SHOWWINDOW = 0x40;
+
+    // ===== 追加：GDI 绘图（渐变 / 圆角 / 线） =====
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TRIVERTEX
+    {
+        public int x, y;
+        public ushort Red, Green, Blue, Alpha;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct GRADIENT_RECT { public uint UpperLeft, LowerRight; }
+
+    [DllImport("msimg32.dll")]
+    public static extern bool GradientFill(IntPtr hdc, IntPtr pVertex, uint dwNumVertex,
+        IntPtr pMesh, uint dwNumMesh, uint dwMode);
+    public const uint GRADIENT_FILL_RECT_H = 0, GRADIENT_FILL_RECT_V = 1;
+
+    [DllImport("gdi32.dll")] public static extern IntPtr CreatePen(int fnPenStyle, int nWidth, uint color);
+    [DllImport("gdi32.dll")] public static extern IntPtr Ellipse(IntPtr hdc, int left, int top, int right, int bottom);
+    [DllImport("gdi32.dll")] public static extern bool MoveToEx(IntPtr hdc, int x, int y, IntPtr lpPoint);
+    [DllImport("gdi32.dll")] public static extern bool LineTo(IntPtr hdc, int x, int y);
+    [DllImport("gdi32.dll")] public static extern IntPtr GetStockObject(int i);
+    public const int NULL_BRUSH = 5, PS_SOLID = 0;
+    [DllImport("gdi32.dll")] public static extern IntPtr CreateRoundRectRgn(int x1, int y1, int x2, int y2, int w, int h);
+    [DllImport("gdi32.dll")] public static extern bool FillRgn(IntPtr hdc, IntPtr hrgn, IntPtr hbr);
+    [DllImport("user32.dll")] public static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
+    [DllImport("gdi32.dll")] public static extern int SaveDC(IntPtr hdc);
+    [DllImport("gdi32.dll")] public static extern bool RestoreDC(IntPtr hdc, int nSavedDC);
+    [DllImport("gdi32.dll")] public static extern int SelectClipRgn(IntPtr hdc, IntPtr hrgn);
 }
+

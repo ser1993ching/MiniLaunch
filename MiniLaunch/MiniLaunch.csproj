@@ -9,6 +9,8 @@
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <RootNamespace>MiniLaunch</RootNamespace>
     <AssemblyName>MiniLaunch</AssemblyName>
+    <!-- 应用清单：comctl32 v6 视觉样式（EDIT 占位提示 / 现代菜单） -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- 源文件为 UTF-8（防系统 GBK 代码页导致中文字面量乱码） -->
     <CodePage>65001</CodePage>
     <!-- 体积/内存优化 -->

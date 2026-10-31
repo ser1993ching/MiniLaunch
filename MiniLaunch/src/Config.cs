@@ -15,7 +15,7 @@ public class CustomEntry
 
 public class AppConfig
 {
-    public string Hotkey { get; set; } = "Alt+Space";
+    public string Hotkey { get; set; } = HotkeyParser.DefaultHotkey;
     public bool AutoStart { get; set; }
     public int MaxResults { get; set; } = 8;
     public List<CustomEntry> Custom { get; set; } = new();
@@ -113,6 +113,9 @@ public static class ConfigStore
 
 public static class HotkeyParser
 {
+    /// <summary>默认热键：Ctrl+Space（与输入法切换冲突时可在托盘菜单里改）。</summary>
+    public const string DefaultHotkey = "Ctrl+Space";
+
     /// <summary>解析 "Alt+Space" / "Ctrl+Alt+P" / "Ctrl+Shift+F1" 形式的热键串。</summary>
     public static (uint mods, uint vk, bool ok) Parse(string s)
     {
@@ -159,4 +162,54 @@ public static class HotkeyParser
         }
         return mods != 0 && keyOk ? (mods, vk, true) : (0, 0, false);
     }
+
+    /// <summary>把虚拟键翻译成显示名（用系统键名，兼容不同键位）。</summary>
+    public static string VkName(uint vk)
+    {
+        try
+        {
+            uint sc = Win32.MapVirtualKeyW(vk, Win32.MAPVK_VK_TO_VSC);
+            if (sc != 0)
+            {
+                var sb = new System.Text.StringBuilder(64);
+                int lp = (int)(sc << 16);
+                if (Win32.GetKeyNameTextW(lp, sb, 64) > 0 && sb.Length > 0)
+                    return sb.ToString();
+            }
+        }
+        catch { }
+        if (vk is >= 0x41 and <= 0x5A) return ((char)vk).ToString();
+        if (vk is >= 0x30 and <= 0x39) return ((char)vk).ToString();
+        if (vk is >= 0x70 and <= 0x87) return "F" + (vk - 0x6F);
+        return "VK" + vk.ToString("X2");
+    }
+
+    /// <summary>把修饰键 + 虚拟键拼回 "Ctrl+Alt+F5" 形式（Parse 的逆运算）。</summary>
+    public static string Format(uint mods, uint vk)
+    {
+        var parts = new List<string>(5);
+        if ((mods & Win32.MOD_CONTROL) != 0) parts.Add("Ctrl");
+        if ((mods & Win32.MOD_ALT) != 0) parts.Add("Alt");
+        if ((mods & Win32.MOD_SHIFT) != 0) parts.Add("Shift");
+        if ((mods & Win32.MOD_WIN) != 0) parts.Add("Win");
+        parts.Add(VkName(vk));
+        return string.Join("+", parts);
+    }
+
+    /// <summary>从当前键盘状态读取修饰键（热键录制用）。</summary>
+    public static uint ModsFromKeyboard()
+    {
+        uint mods = 0;
+        if ((Win32.GetKeyState(Win32.VK_CONTROL) & 0x8000) != 0) mods |= Win32.MOD_CONTROL;
+        if ((Win32.GetKeyState(Win32.VK_MENU) & 0x8000) != 0) mods |= Win32.MOD_ALT;
+        if ((Win32.GetKeyState(Win32.VK_SHIFT) & 0x8000) != 0) mods |= Win32.MOD_SHIFT;
+        if ((Win32.GetKeyState(Win32.VK_LWIN) & 0x8000) != 0 || (Win32.GetKeyState(Win32.VK_RWIN) & 0x8000) != 0)
+            mods |= Win32.MOD_WIN;
+        return mods;
+    }
+
+    /// <summary>是否为单独的修饰键（录制时应跳过）。</summary>
+    public static bool IsModifierKey(int vk) =>
+        vk is Win32.VK_CONTROL or Win32.VK_MENU or Win32.VK_SHIFT or Win32.VK_LWIN or Win32.VK_RWIN
+           or 0xA0 or 0xA1 or 0xA2 or 0xA3 or 0xA4 or 0xA5; // L/R Shift/Ctrl/Alt
 }

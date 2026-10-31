@@ -84,6 +84,7 @@ public static class Tray
     {
         var menu = Win32.CreatePopupMenu();
         Win32.AppendMenuW(menu, Win32.MF_STRING, 100, "显示主窗口");
+        Win32.AppendMenuW(menu, Win32.MF_STRING, 106, "设置热键…（" + Program.Cfg.Hotkey + "）");
         Win32.AppendMenuW(menu, Win32.MF_STRING, 101, "添加程序…");
         Win32.AppendMenuW(menu, Win32.MF_STRING, 102, "重新扫描");
         Win32.AppendMenuW(menu, Win32.MF_STRING | (Program.Cfg.AutoStart ? Win32.MF_CHECKED : 0u), 103, "开机自启");
@@ -102,6 +103,7 @@ public static class Tray
         switch (cmd)
         {
             case 100: MainWindow.Instance?.ShowWin(); break;
+            case 106: Program.ShowHotkeySettings(); break;
             case 101: Program.PickAndAddFile(hwnd); break;
             case 102: Program.StartScan(true); break;
             case 103: Program.ToggleAutoStart(); break;

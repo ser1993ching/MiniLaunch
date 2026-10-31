@@ -10,7 +10,8 @@ public sealed class MainWindow
     const int VisibleRows = 8;
 
     // 基准尺寸（96 DPI）
-    const int BaseW = 680, BasePad = 16, BaseEditH = 48, BaseRowH = 48, BaseIcon = 32, BaseGap = 10;
+    const int BaseW = 720, BasePad = 16, BaseRowH = 54, BaseFooterH = 38, BaseIcon = 34;
+    const int BaseSearchH = 54, BaseRadius = 12, BaseSearchRadius = 12;
 
     static readonly Win32.WndProcDelegate s_wndProc = WndProcStatic;
     static readonly Win32.SubclassProcDelegate s_editProc = EditProcStatic;
@@ -31,18 +32,14 @@ public sealed class MainWindow
     int _sel, _offset = -1, _hover = -1;
     bool _trackMouse;
 
-    float _scale = 1f;
-    int _w, _pad, _editH, _rowH, _icon, _gap, _listTop, _h;
-    IntPtr _fontMain, _fontSub, _fontEdit;
-    IntPtr _brushBg, _brushHover, _brushSel, _brushEditBg;
+    /// <summary>预览模式（--preview 启动）：不因失焦自动隐藏，便于截图与界面调试。</summary>
+    public bool PreviewMode;
 
-    // 配色（uTools 风格深色，0x00BBGGRR）
-    static readonly uint Bg = Win32.Rgb(0x25, 0x26, 0x2B);      // #25262B
-    static readonly uint Hover = Win32.Rgb(0x2E, 0x30, 0x38);    // #2E3038
-    static readonly uint Sel = Win32.Rgb(0x3B, 0x5B, 0xDB);      // #3B5BDB
-    static readonly uint EditBg = Win32.Rgb(0x25, 0x26, 0x2B);
-    static readonly uint TextMain = Win32.Rgb(0xF2, 0xF3, 0xF5);
-    static readonly uint TextSub = Win32.Rgb(0x9B, 0x9E, 0xA8);
+    float _scale = 1f;
+    int _w, _h, _pad, _rowH, _icon, _radius;
+    int _searchTop, _searchH, _dividerY, _listTop, _footerY, _footerH;
+    IntPtr _fontMain, _fontSub, _fontEdit, _fontSmall, _fontKey;
+    IntPtr _brushHover, _brushSel, _brushEditBg, _brushCap, _brushTrack, _brushThumb, _brushBorder;
 
     MainWindow(AppConfig cfg, SearchEngine search, IconCache icons, Action<Entry, bool> onLaunch, Action rescan, Action<string[]> addFiles)
     {
@@ -102,7 +99,7 @@ public sealed class MainWindow
             waW = mi.rcWork.Width; waH = mi.rcWork.Height;
         }
         int x = waL + (waW - _w) / 2;
-        int y = waT + (int)(waH * 0.32);
+        int y = waT + (int)(waH * 0.30);
         Win32.SetWindowPos(Hwnd, Win32.HWND_TOPMOST, x, y, 0, 0, Win32.SWP_NOSIZE);
 
         Win32.ShowWindow(Hwnd, Win32.SW_SHOW);
@@ -115,6 +112,12 @@ public sealed class MainWindow
     public void HideWin()
     {
         Win32.ShowWindow(Hwnd, Win32.SW_HIDE);
+    }
+
+    /// <summary>外部状态变化（如热键改动）后请求重绘，用于刷新底栏提示。</summary>
+    public void RequestRepaint()
+    {
+        if (Hwnd != IntPtr.Zero) Win32.InvalidateRect(Hwnd, IntPtr.Zero, false);
     }
 
     void ForceForeground()
@@ -169,48 +172,58 @@ public sealed class MainWindow
     void RecalcMetrics(float scale)
     {
         _scale = scale;
-        _w = Scale(BaseW);
         _pad = Scale(BasePad);
-        _editH = Scale(BaseEditH);
+        _w = Scale(BaseW);
         _rowH = Scale(BaseRowH);
         _icon = Scale(BaseIcon);
-        _gap = Scale(BaseGap);
-        _listTop = _pad + _editH + _gap;
-        _h = _listTop + _rowH * VisibleRows + _pad;
+        _radius = Scale(BaseRadius);
+        _searchTop = _pad;
+        _searchH = Scale(BaseSearchH);
+        _dividerY = _searchTop + _searchH + Scale(10);
+        _listTop = _dividerY + Scale(8);
+        _footerH = Scale(BaseFooterH);
+        _footerY = _listTop + _rowH * VisibleRows + Scale(4);
+        _h = _footerY + _footerH + Scale(6);
     }
 
     int Scale(int v) => (int)Math.Round(v * _scale);
 
+    static IntPtr MakeFont(int px, int weight, float scale) =>
+        Win32.CreateFontW(-(int)Math.Round(px * scale), 0, 0, 0, weight, 0, 0, 0,
+            Win32.DEFAULT_CHARSET, Win32.OUT_DEFAULT_PRECIS, Win32.CLIP_DEFAULT_PRECIS,
+            Win32.CLEARTYPE_QUALITY, Win32.DEFAULT_PITCH | Win32.FF_SWISS, "Microsoft YaHei UI");
+
     void CreateFonts()
     {
         DeleteFonts();
-        _fontMain = Win32.CreateFontW(-Scale(19), 0, 0, 0, Win32.FW_SEMIBOLD, 0, 0, 0,
-            Win32.DEFAULT_CHARSET, Win32.OUT_DEFAULT_PRECIS, Win32.CLIP_DEFAULT_PRECIS,
-            Win32.CLEARTYPE_QUALITY, Win32.DEFAULT_PITCH | Win32.FF_SWISS, "Microsoft YaHei UI");
-        _fontSub = Win32.CreateFontW(-Scale(13), 0, 0, 0, Win32.FW_NORMAL, 0, 0, 0,
-            Win32.DEFAULT_CHARSET, Win32.OUT_DEFAULT_PRECIS, Win32.CLIP_DEFAULT_PRECIS,
-            Win32.CLEARTYPE_QUALITY, Win32.DEFAULT_PITCH | Win32.FF_SWISS, "Microsoft YaHei UI");
-        _fontEdit = Win32.CreateFontW(-Scale(20), 0, 0, 0, Win32.FW_NORMAL, 0, 0, 0,
-            Win32.DEFAULT_CHARSET, Win32.OUT_DEFAULT_PRECIS, Win32.CLIP_DEFAULT_PRECIS,
-            Win32.CLEARTYPE_QUALITY, Win32.DEFAULT_PITCH | Win32.FF_SWISS, "Microsoft YaHei UI");
+        _fontMain = MakeFont(16, Win32.FW_SEMIBOLD, _scale);
+        _fontSub = MakeFont(12, Win32.FW_NORMAL, _scale);
+        _fontEdit = MakeFont(19, Win32.FW_NORMAL, _scale);
+        _fontSmall = MakeFont(11, Win32.FW_NORMAL, _scale);
+        _fontKey = MakeFont(11, Win32.FW_SEMIBOLD, _scale);
         if (_edit != IntPtr.Zero)
             Win32.SendMessageW(_edit, Win32.WM_SETFONT, _fontEdit, (IntPtr)1);
     }
 
     void DeleteFonts()
     {
-        if (_fontMain != IntPtr.Zero) { Win32.DeleteObject(_fontMain); _fontMain = IntPtr.Zero; }
-        if (_fontSub != IntPtr.Zero) { Win32.DeleteObject(_fontSub); _fontSub = IntPtr.Zero; }
-        if (_fontEdit != IntPtr.Zero) { Win32.DeleteObject(_fontEdit); _fontEdit = IntPtr.Zero; }
+        foreach (var f in new[] { _fontMain, _fontSub, _fontEdit, _fontSmall, _fontKey })
+            if (f != IntPtr.Zero) Win32.DeleteObject(f);
+        _fontMain = _fontSub = _fontEdit = _fontSmall = _fontKey = IntPtr.Zero;
     }
 
     void CreateBrushes()
     {
-        _brushBg = Win32.CreateSolidBrush(Bg);
-        _brushHover = Win32.CreateSolidBrush(Hover);
-        _brushSel = Win32.CreateSolidBrush(Sel);
-        _brushEditBg = Win32.CreateSolidBrush(EditBg);
+        _brushHover = Win32.CreateSolidBrush(Theme.Hover);
+        _brushSel = Win32.CreateSolidBrush(Theme.SelBottom);
+        _brushEditBg = Win32.CreateSolidBrush(Theme.Surface);
+        _brushCap = Win32.CreateSolidBrush(Theme.KeyCapBg);
+        _brushTrack = Win32.CreateSolidBrush(Theme.Divider);
+        _brushThumb = Win32.CreateSolidBrush(Theme.Thumb);
+        _brushBorder = Win32.CreateSolidBrush(Theme.SurfaceBorder);
     }
+
+    IntPtr[] Brushes => new[] { _brushHover, _brushSel, _brushEditBg, _brushCap, _brushTrack, _brushThumb, _brushBorder };
 
     // ================= 窗口过程 =================
     static IntPtr WndProcStatic(IntPtr h, uint msg, IntPtr w, IntPtr l)
@@ -248,16 +261,17 @@ public sealed class MainWindow
                 return IntPtr.Zero;
 
             case Win32.WM_CTLCOLOREDIT:
-                if (w == _edit)
+                // 注意：wParam 是 HDC，lParam 才是指控件句柄
+                if (l == _edit)
                 {
-                    Win32.SetTextColor(w, (int)TextMain);
-                    Win32.SetBkColor(w, (int)EditBg);
+                    Win32.SetTextColor(w, (int)Theme.TextMain);
+                    Win32.SetBkColor(w, (int)Theme.Surface);
                     return _brushEditBg;
                 }
                 break;
 
             case Win32.WM_ACTIVATE:
-                if (Win32.LOWORD(w) == 0) // WA_INACTIVE
+                if (Win32.LOWORD(w) == 0 && !PreviewMode) // WA_INACTIVE
                 {
                     uint fgThread = Win32.GetWindowThreadProcessId(Win32.GetForegroundWindow(), out _);
                     if (fgThread != Win32.GetCurrentThreadId())
@@ -375,9 +389,8 @@ public sealed class MainWindow
 
             case Win32.WM_DESTROY:
                 DeleteFonts();
-                foreach (var b in new[] { _brushBg, _brushHover, _brushSel, _brushEditBg })
+                foreach (var b in Brushes)
                     if (b != IntPtr.Zero) Win32.DeleteObject(b);
-                Win32.PostMessageW(h, Win32.WM_NULL, IntPtr.Zero, IntPtr.Zero);
                 Win32.PostQuitMessage(0);
                 return IntPtr.Zero;
         }
@@ -393,26 +406,39 @@ public sealed class MainWindow
         CreateBrushes();
 
         IntPtr hinst = Win32.GetModuleHandleW(null);
+        // 搜索框：胶囊形 EDIT，左侧留出放大镜图标
         _edit = Win32.CreateWindowExW(0, "EDIT", "",
             Win32.WS_CHILD | Win32.WS_VISIBLE | Win32.ES_LEFT | Win32.ES_AUTOHSCROLL,
-            _pad, _pad, _w - _pad * 2, _editH,
+            0, 0, 10, 10,
             h, (IntPtr)EditId, hinst, IntPtr.Zero);
         Win32.SetWindowSubclass(_edit, s_editProc, 1, IntPtr.Zero);
         Win32.SendMessageW(_edit, Win32.WM_SETFONT, _fontEdit, (IntPtr)1);
+        Win32.SendMessageW(_edit, Win32.EM_SETCUEBANNER, (IntPtr)1, Marshal.StringToHGlobalUni("搜索应用、文件或命令…"));
+        LayoutEdit();
         Win32.DragAcceptFiles(h, true);
 
-        try
-        {
-            int pref = Win32.DWMWCP_ROUND;
-            Win32.DwmSetWindowAttribute(h, Win32.DWMWA_WINDOW_CORNER_PREFERENCE, ref pref, sizeof(int));
-        }
-        catch { /* Win10 无 DWM 圆角，忽略 */ }
+        Theme.ApplyModernFrame(h);
+    }
+
+    // 搜索胶囊的外框矩形（与 EDIT 位置共享同一套几何）
+    Win32.RECT SearchPill(int cx)
+    {
+        int l = _pad + Scale(30);
+        int t = _searchTop + Scale(4);
+        return new Win32.RECT { L = l, T = t, R = cx - _pad, B = _searchTop + _searchH - Scale(4) };
     }
 
     void LayoutEdit()
     {
-        if (_edit != IntPtr.Zero)
-            Win32.MoveWindow(_edit, _pad, _pad, _w - _pad * 2, _editH, true);
+        if (_edit == IntPtr.Zero) return;
+        var outer = SearchPill(_w);
+        int l = outer.L + Scale(14), t = outer.T + Scale(4);
+        int w = outer.Width - Scale(28), h = outer.Height - Scale(8);
+        Win32.MoveWindow(_edit, l, t, w, h, true);
+        // 文本左右内边距
+        int mg = Scale(12);
+        Win32.SendMessageW(_edit, Win32.EM_SETMARGINS,
+            (IntPtr)(Win32.EC_LEFTMARGIN | Win32.EC_RIGHTMARGIN), (IntPtr)((mg << 16) | (mg & 0xFFFF)));
     }
 
     void OnDropFiles(IntPtr hDrop)
@@ -433,7 +459,7 @@ public sealed class MainWindow
 
     int HitRowAt(int x, int y)
     {
-        if (y < _listTop) return -1;
+        if (y < _listTop || y >= _listTop + _rowH * VisibleRows) return -1;
         int row = (y - _listTop) / _rowH;
         return row >= 0 && row < VisibleRows ? _offset + row : -1;
     }
@@ -490,58 +516,7 @@ public sealed class MainWindow
             IntPtr bmp = Win32.CreateCompatibleBitmap(hdc, cx, cy);
             IntPtr oldBmp = Win32.SelectObject(mem, bmp);
 
-            var all = new Win32.RECT { L = 0, T = 0, R = cx, B = cy };
-            Win32.FillRect(mem, ref all, _brushBg);
-
-            Win32.SetBkMode(mem, Win32.TRANSPARENT);
-
-            if (_results.Length == 0)
-            {
-                Win32.SelectObject(mem, _fontSub);
-                Win32.SetTextColor(mem, (int)TextSub);
-                var r = new Win32.RECT { L = 0, T = _listTop, R = cx, B = _listTop + _rowH };
-                Win32.DrawTextW(mem, "未找到匹配的应用", -1, ref r,
-                    Win32.DT_SINGLELINE | Win32.DT_LEFT | Win32.DT_VCENTER | Win32.DT_NOPREFIX);
-                // 左边距
-            }
-            else
-            {
-                int rows = Math.Min(VisibleRows, _results.Length - _offset);
-                for (int i = 0; i < rows; i++)
-                {
-                    int idx = _offset + i;
-                    var e = _results[idx];
-                    int y = _listTop + i * _rowH;
-                    var row = new Win32.RECT { L = _pad, T = y, R = cx - _pad, B = y + _rowH - _gap / 2 };
-
-                    if (idx == _sel) Win32.FillRect(mem, ref row, _brushSel);
-                    else if (idx == _hover) Win32.FillRect(mem, ref row, _brushHover);
-
-                    // 图标
-                    IntPtr hIcon = _icons.Get(e);
-                    if (hIcon != IntPtr.Zero)
-                        Win32.DrawIconEx(mem, row.L + _pad, y + (_rowH - _icon) / 2, hIcon, _icon, _icon, 0, IntPtr.Zero, Win32.DI_NORMAL);
-
-                    // 主文本
-                    int textX = row.L + _pad * 2 + _icon;
-                    Win32.SelectObject(mem, _fontMain);
-                    Win32.SetTextColor(mem, (int)TextMain);
-                    var rName = new Win32.RECT { L = textX, T = y, R = row.R - _pad, B = y + _rowH };
-                    Win32.DrawTextW(mem, e.Name, -1, ref rName,
-                        Win32.DT_SINGLELINE | Win32.DT_LEFT | Win32.DT_VCENTER | Win32.DT_END_ELLIPSIS | Win32.DT_NOPREFIX);
-
-                    // 副文本（路径/AUMID）
-                    string sub = Shorten(e.DisplayPath, 72);
-                    if (sub.Length > 0)
-                    {
-                        Win32.SelectObject(mem, _fontSub);
-                        Win32.SetTextColor(mem, (int)TextSub);
-                        var rSub = new Win32.RECT { L = textX + Scale(150), T = y, R = row.R - _pad, B = y + _rowH };
-                        Win32.DrawTextW(mem, sub, -1, ref rSub,
-                            Win32.DT_SINGLELINE | Win32.DT_LEFT | Win32.DT_VCENTER | Win32.DT_END_ELLIPSIS | Win32.DT_NOPREFIX);
-                    }
-                }
-            }
+            DrawAll(mem, cx, cy);
 
             Win32.BitBlt(hdc, 0, 0, cx, cy, mem, 0, 0, Win32.SRCCOPY);
             Win32.SelectObject(mem, oldBmp);
@@ -554,10 +529,186 @@ public sealed class MainWindow
         }
     }
 
+    void DrawAll(IntPtr hdc, int cx, int cy)
+    {
+        var all = new Win32.RECT { L = 0, T = 0, R = cx, B = cy };
+        Theme.GradientV(hdc, all, Theme.BgTop, Theme.BgBottom);
+        Win32.SetBkMode(hdc, Win32.TRANSPARENT);
+
+        DrawSearchBand(hdc, cx);
+        DrawResults(hdc, cx);
+        DrawFooter(hdc, cx);
+    }
+
+    // 顶部搜索区：放大镜 + 胶囊形搜索框（框体是 EDIT 子窗口，此处只画外圈与图标）
+    void DrawSearchBand(IntPtr hdc, int cx)
+    {
+        // 放大镜
+        int gs = Scale(17);
+        int gx = _pad + Scale(6);
+        int gy = _searchTop + (_searchH - gs) / 2;
+        Theme.DrawMagnifier(hdc, gx, gy, gs, Theme.TextDim, Math.Max(1, Scale(2)));
+
+        // 搜索框外框：1px 细边 + 圆角，内部由 EDIT 自己填充
+        var outer = SearchPill(cx);
+        int r = Scale(BaseSearchRadius);
+        var inner = new Win32.RECT { L = outer.L + 1, T = outer.T + 1, R = outer.R - 1, B = outer.B - 1 };
+        Theme.FillRoundSolid(hdc, outer, r, _brushBorder);
+        Theme.FillRoundSolid(hdc, inner, Math.Max(2, r - 1), _brushEditBg);
+
+        // 分隔线
+        Theme.HLine(hdc, _pad + Scale(4), cx - _pad - Scale(4), _dividerY, Theme.Divider);
+    }
+
+    void DrawResults(IntPtr hdc, int cx)
+    {
+        if (_results.Length == 0)
+        {
+            Win32.SelectObject(hdc, _fontMain);
+            Win32.SetTextColor(hdc, (int)Theme.TextSub);
+            int y = _listTop + _rowH * 2;
+            var r1 = new Win32.RECT { L = _pad, T = y, R = cx - _pad, B = y + Scale(26) };
+            Win32.DrawTextW(hdc, "没有找到匹配的项目", -1, ref r1, Theme.AlignCenter);
+
+            Win32.SelectObject(hdc, _fontSub);
+            Win32.SetTextColor(hdc, (int)Theme.TextDim);
+            var r2 = new Win32.RECT { L = _pad, T = y + Scale(28), R = cx - _pad, B = y + Scale(50) };
+            Win32.DrawTextW(hdc, "试试拼音首字母（如 wx 找微信），或把程序拖进窗口添加", -1, ref r2, Theme.AlignCenter);
+            return;
+        }
+
+        int rows = Math.Min(VisibleRows, _results.Length - _offset);
+        for (int i = 0; i < rows; i++)
+        {
+            int idx = _offset + i;
+            var e = _results[idx];
+            bool selected = idx == _sel;
+            bool hovered = !selected && idx == _hover;
+            int y = _listTop + i * _rowH;
+            var row = new Win32.RECT
+            {
+                L = _pad,
+                T = y + Scale(2),
+                R = cx - _pad - Scale(10),
+                B = y + _rowH - Scale(2),
+            };
+
+            if (selected)
+                Theme.FillRoundGradient(hdc, row, _radius, Theme.SelTop, Theme.SelBottom);
+            else if (hovered)
+                Theme.FillRoundSolid(hdc, row, _radius, _brushHover);
+
+            // 图标
+            IntPtr hIcon = _icons.Get(e);
+            int iconX = row.L + Scale(12);
+            int iconY = y + (_rowH - _icon) / 2;
+            if (hIcon != IntPtr.Zero)
+                Win32.DrawIconEx(hdc, iconX, iconY, hIcon, _icon, _icon, 0, IntPtr.Zero, Win32.DI_NORMAL);
+
+            int textX = iconX + _icon + Scale(12);
+            int textR = row.R - Scale(10);
+
+            // 管理员标记（右侧，先算宽度再决定标题可用宽度）
+            if (e.RunAs)
+            {
+                Win32.SelectObject(hdc, _fontSmall);
+                Win32.SetTextColor(hdc, (int)(selected ? Theme.TextOnSelSub : Theme.Warn));
+                var rTag = new Win32.RECT { L = textR - Scale(52), T = y, R = textR, B = y + _rowH };
+                Win32.DrawTextW(hdc, "管理员", -1, ref rTag, Theme.AlignRight);
+                textR -= Scale(58);
+            }
+
+            // 主标题
+            Win32.SelectObject(hdc, _fontMain);
+            Win32.SetTextColor(hdc, (int)(selected ? Theme.TextOnSel : Theme.TextMain));
+            var rName = new Win32.RECT { L = textX, T = y + Scale(8), R = textR, B = y + Scale(8) + Scale(22) };
+            Win32.DrawTextW(hdc, e.Name, -1, ref rName, Theme.AlignLeft);
+
+            // 副标题（路径 / AUMID）
+            string sub = Shorten(e.DisplayPath, 76);
+            if (sub.Length > 0)
+            {
+                Win32.SelectObject(hdc, _fontSub);
+                Win32.SetTextColor(hdc, (int)(selected ? Theme.TextOnSelSub : Theme.TextSub));
+                var rSub = new Win32.RECT { L = textX, T = y + Scale(29), R = textR, B = y + Scale(29) + Scale(16) };
+                Win32.DrawTextW(hdc, sub, -1, ref rSub, Theme.AlignLeft);
+            }
+        }
+
+        DrawScrollbar(hdc, cx);
+    }
+
+    // 右侧细滚动条（结果多于可视行时出现）
+    void DrawScrollbar(IntPtr hdc, int cx)
+    {
+        if (_results.Length <= VisibleRows) return;
+        int trackW = Scale(4);
+        int x = cx - _pad - Scale(8);
+        int top = _listTop + Scale(4);
+        int h = _rowH * VisibleRows - Scale(8);
+        var track = new Win32.RECT { L = x, T = top, R = x + trackW, B = top + h };
+        Theme.FillRoundSolid(hdc, track, trackW, _brushTrack);
+
+        int total = _results.Length;
+        int thumbH = Math.Max(Scale(28), h * VisibleRows / total);
+        int maxOffset = Math.Max(1, total - VisibleRows);
+        int thumbY = top + (h - thumbH) * Math.Clamp(_offset, 0, maxOffset) / maxOffset;
+        var thumb = new Win32.RECT { L = x, T = thumbY, R = x + trackW, B = thumbY + thumbH };
+        Theme.FillRoundSolid(hdc, thumb, trackW, _brushThumb);
+    }
+
+    // 底部提示栏：快捷键说明 + 当前热键
+    void DrawFooter(IntPtr hdc, int cx)
+    {
+        Theme.HLine(hdc, _pad + Scale(4), cx - _pad - Scale(4), _footerY, Theme.FooterLine);
+
+        int capH = Scale(19);
+        int capPad = Scale(6);
+        int gap = Scale(6);
+        int ty = _footerY + (_footerH - capH) / 2;
+        int x = _pad + Scale(2);
+
+        void Hint(string key, string label)
+        {
+            if (key.Length > 0)
+            {
+                x = Theme.DrawKeyCap(hdc, x, ty, capH, key, _fontKey, _brushCap, Theme.KeyCapText, capPad);
+                x += gap;
+            }
+            Win32.SelectObject(hdc, _fontSmall);
+            Win32.SetTextColor(hdc, (int)Theme.TextDim);
+            var r = new Win32.RECT { L = x, T = _footerY, R = x + Scale(140), B = _footerY + _footerH };
+            Win32.DrawTextW(hdc, label, -1, ref r, Theme.AlignLeft);
+            x += Theme.MeasureText(hdc, _fontSmall, label) + Scale(14);
+        }
+
+        Hint("↑↓", "选择");
+        Hint("Enter", "打开");
+        Hint("Esc", "关闭");
+
+        // 右侧：当前热键
+        string hk = Program.Cfg.Hotkey;
+        var rRight = new Win32.RECT { L = 0, T = _footerY, R = cx - _pad - Scale(2), B = _footerY + _footerH };
+        Win32.SelectObject(hdc, _fontSmall);
+        Win32.SetTextColor(hdc, (int)Theme.TextDim);
+        Win32.DrawTextW(hdc, "呼出", -1, ref rRight, Theme.AlignRight);
+        int hkW = Theme.MeasureText(hdc, _fontKey, hk) + capPad * 2;
+        int hkX = rRight.R - Scale(32) - hkW;
+        if (hkX > x)
+            Theme.DrawKeyCap(hdc, hkX, ty, capH, hk, _fontKey, _brushCap, Theme.KeyCapText, capPad);
+    }
+
     static string Shorten(string s, int max)
     {
         if (s.Length <= max) return s;
-        int start = s.Length - (max - 1);
+        int start = s.Length - (max - 2);
+        if (s.IndexOf('\\', 0) >= 0)
+        {
+            // 路径：从后面往前保留完整目录段，避免把词切断（如 “…\nsys 2022 R2” ）
+            int sep = s.IndexOf('\\', start);
+            if (sep > 0 && sep < s.Length - 1) return "…" + s.Substring(sep);
+            return "…\\" + s.Substring(start).TrimStart('\\');
+        }
         return "…" + s.Substring(start);
     }
 
