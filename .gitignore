@@ -1,0 +1,17 @@
+# 构建产物
+bin/
+obj/
+publish/
+
+# 自检报告
+selftest-report.txt
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+
+# 会话/临时文件
+pi-session-*.html
+*.tmp

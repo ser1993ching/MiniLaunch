@@ -1,0 +1,234 @@
+﻿using System.Diagnostics;
+using System.Runtime.InteropServices;
+using Microsoft.Win32;
+
+namespace MiniLaunch;
+
+public static class Program
+{
+    const string MutexName = "Local\\MiniLaunch_SingleInstance";
+    const string ShowEventName = "Local\\MiniLaunch_ShowSignal";
+
+    static AppConfig _cfg = new();
+    static UsageDb _usage = new();
+    static SearchEngine _search = null!;
+    static IconCache _icons = null!;
+    static MainWindow? _win;
+    static int _scanning;
+
+    public static AppConfig Cfg => _cfg;
+
+    public static int Main(string[] args)
+    {
+        if (args.Length > 0 && args.Contains("--selftest"))
+            return SelfTest.Run();
+
+        Paths.EnsureDir();
+        bool firstRun = !File.Exists(Paths.ConfigPath);
+        _cfg = ConfigStore.LoadConfig();
+        _usage = ConfigStore.LoadUsage();
+        _search = new SearchEngine(_usage);
+        _icons = new IconCache();
+
+        using var mutex = new Mutex(true, MutexName, out bool createdNew);
+        if (!createdNew)
+        {
+            try
+            {
+                using var ev = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
+                ev.Set();
+            }
+            catch { }
+            return 0;
+        }
+
+        _ = Win32.SetProcessDpiAwarenessContext(Win32.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
+        StartScan(false);
+
+        var signalThread = new Thread(WaitShowSignal) { IsBackground = true };
+        signalThread.Start();
+
+        _win = MainWindow.Create(_cfg, _search, _icons, OnLaunch, () => StartScan(true), AddFiles);
+
+        Tray.Init(_win.Hwnd);
+
+        var (mods, vk, ok) = HotkeyParser.Parse(_cfg.Hotkey);
+        bool hkOk = ok && Win32.RegisterHotKey(_win.Hwnd, 1, mods | Win32.MOD_NOREPEAT, vk);
+        if (!hkOk)
+            Tray.Notify("热键注册失败", $"“{_cfg.Hotkey}”可能被其他程序占用，请修改配置文件后重启。");
+
+        if (firstRun)
+        {
+            ConfigStore.SaveConfig(_cfg); // 首次运行即落盘默认配置，便于用户发现与编辑
+            _win.ShowWin();
+        }
+
+        AppDomain.CurrentDomain.ProcessExit += (s, e) => ConfigStore.SaveUsage(_usage);
+
+        int rc = RunLoop();
+
+        Win32.UnregisterHotKey(_win.Hwnd, 1);
+        Tray.Destroy();
+        _icons.Dispose();
+        ConfigStore.SaveUsage(_usage);
+        return rc;
+    }
+
+    static int RunLoop()
+    {
+        while (Win32.GetMessageW(out var msg, IntPtr.Zero, 0, 0) > 0)
+        {
+            Win32.TranslateMessage(ref msg);
+            Win32.DispatchMessageW(ref msg);
+        }
+        return 0;
+    }
+
+    static void WaitShowSignal()
+    {
+        try
+        {
+            while (true)
+            {
+                using var ev = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
+                if (ev.WaitOne() && _win != null)
+                    Win32.PostMessageW(_win.Hwnd, Win32.WM_APP_SHOW, IntPtr.Zero, IntPtr.Zero);
+            }
+        }
+        catch { }
+    }
+
+    public static void OnLaunch(Entry e, bool runAs)
+    {
+        bool ok = Launcher.Run(e, runAs);
+        if (ok)
+        {
+            if (!_usage.Recs.TryGetValue(e.UniqueKey, out var r))
+                _usage.Recs[e.UniqueKey] = r = new UsageRec();
+            r.Count++;
+            r.LastTicks = DateTime.UtcNow.Ticks;
+            ConfigStore.SaveUsage(_usage);
+        }
+        _win?.HideWin();
+    }
+
+    public static void StartScan(bool foreground)
+    {
+        if (Interlocked.CompareExchange(ref _scanning, 1, 0) != 0) return;
+        var t = new Thread(() =>
+        {
+            try { DoScan(); }
+            finally { Interlocked.Exchange(ref _scanning, 0); }
+        })
+        {
+            IsBackground = true,
+            Priority = foreground ? ThreadPriority.Normal : ThreadPriority.BelowNormal,
+        };
+        t.Start();
+    }
+
+    static void DoScan()
+    {
+        var custom = Scanners.ScanCustom(_cfg);
+        var sm = Scanners.ScanStartMenu();
+        var reg = Scanners.ScanRegistry();
+        var uwp = Scanners.ScanUwp(false);
+        var merged = EntryMerger.Merge(custom, sm, reg, uwp);
+        _search.SetEntries(merged);
+        if (_win != null)
+            Win32.PostMessageW(_win.Hwnd, Win32.WM_APP_SCAN_DONE, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    public static void AddFiles(string[] files)
+    {
+        bool added = false;
+        foreach (var f in files)
+        {
+            string ext = Path.GetExtension(f).ToLowerInvariant();
+            bool isDir = Directory.Exists(f);
+            if (ext != ".exe" && ext != ".lnk" && ext != ".url" && !isDir) continue;
+            string name = Path.GetFileNameWithoutExtension(f);
+            if (ext == ".exe")
+            {
+                try
+                {
+                    var fi = FileVersionInfo.GetVersionInfo(f);
+                    if (!string.IsNullOrEmpty(fi.FileDescription)) name = fi.FileDescription;
+                }
+                catch { }
+            }
+            _cfg.Custom.Add(new CustomEntry { Name = name, Path = f });
+            added = true;
+        }
+        if (added)
+        {
+            ConfigStore.SaveConfig(_cfg);
+            StartScan(true);
+        }
+    }
+
+    public static void PickAndAddFile(IntPtr owner)
+    {
+        const int BufChars = 1024;
+        IntPtr buf = Marshal.AllocHGlobal(BufChars * 2);
+        try
+        {
+            Marshal.Copy(new byte[BufChars * 2], 0, buf, BufChars * 2);
+            var ofn = new Win32.OPENFILENAMEW
+            {
+                lStructSize = (uint)Marshal.SizeOf<Win32.OPENFILENAMEW>(),
+                hwndOwner = owner,
+                lpstrFilter = "程序\0*.exe;*.lnk;*.url\0所有文件\0*.*\0",
+                lpstrFile = buf,
+                nMaxFile = BufChars,
+                lpstrTitle = "选择要添加的程序",
+                Flags = Win32.OFN_EXPLORER | Win32.OFN_FILEMUSTEXIST | Win32.OFN_PATHMUSTEXIST | Win32.OFN_HIDEREADONLY,
+            };
+            if (Win32.GetOpenFileNameW(ref ofn))
+            {
+                string? f = Marshal.PtrToStringUni(buf);
+                if (!string.IsNullOrEmpty(f)) AddFiles(new[] { f });
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buf);
+        }
+    }
+
+    public static void ToggleAutoStart()
+    {
+        _cfg.AutoStart = !_cfg.AutoStart;
+        try
+        {
+            using var k = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
+            if (_cfg.AutoStart)
+            {
+                string? exe = Environment.ProcessPath;
+                if (!string.IsNullOrEmpty(exe)) k.SetValue("MiniLaunch", "\"" + exe + "\"");
+            }
+            else
+            {
+                k.DeleteValue("MiniLaunch", throwOnMissingValue: false);
+            }
+        }
+        catch { }
+        ConfigStore.SaveConfig(_cfg);
+    }
+
+    public static void OpenConfig()
+    {
+        try
+        {
+            var info = new Win32.SHELLEXECUTEINFOW
+            {
+                cbSize = Marshal.SizeOf<Win32.SHELLEXECUTEINFOW>(),
+                lpFile = Paths.ConfigPath,
+                nShow = Win32.SW_SHOWNORMAL,
+            };
+            Win32.ShellExecuteExW(ref info);
+        }
+        catch { }
+    }
+}
