@@ -126,7 +126,7 @@ public sealed class HotkeyDialog
             case Win32.WM_CREATE:
             {
                 Hwnd = h;
-                RecalcMetrics(Win32.GetDpiForWindow(h) / 96f);
+                RecalcMetrics(Dpi.ForWindow(h) / 96f);
                 CreateFonts();
                 Theme.ApplyModernFrame(h);
                 return IntPtr.Zero;

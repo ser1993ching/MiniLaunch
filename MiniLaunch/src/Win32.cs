@@ -335,8 +335,23 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern uint GetDpiForWindow(IntPtr hWnd);
 
+    /// <summary>Win10 1703+；不可用时由 Dpi.EnableAwareness 降级到 SetProcessDPIAware。</summary>
     [DllImport("user32.dll")]
     public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+
+    /// <summary>Vista+ 的系统级 DPI 感知，作为老系统降级方案。</summary>
+    [DllImport("user32.dll")]
+    public static extern bool SetProcessDPIAware();
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetDC(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+    [DllImport("gdi32.dll")]
+    public static extern int GetDeviceCaps(IntPtr hdc, int index);
+    public const int LOGPIXELSX = 88, LOGPIXELSY = 90;
     public static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new(-4);
 
     [DllImport("user32.dll")]

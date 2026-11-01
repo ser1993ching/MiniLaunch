@@ -73,6 +73,7 @@ MiniLaunch/src/
   Search.cs      分词 AND 匹配 + 打分（名前缀 100 > 名包含 80+位置 > 别名 60 > 路径 30；+log2(1+Count)*12；24h 内 +15）
   IconCache.cs   HICON 提取（SHGetFileInfo / ExtractIconEx）+ LRU(64)，驱逐时 DestroyIcon
   AppIcon.cs     应用图标加载（exe 模块 RT_GROUP_ICON 32512 → LoadImageW）
+  Dpi.cs         DPI 感知设置与 DPI 查询（老系统降级，见「易踩的坑」第 17 条）
   Launcher.cs    ShellExecuteEx 封装（runas / 工作目录 / explorer /select）
   Theme.cs       配色表 + GDI 绘制工具（竖向渐变 / 圆角填充 / 按键帽 / 放大镜 / DWM 圆角）
   MainWindow.cs  无边框 WS_POPUP + 原生 EDIT 子类化 + 自绘双缓冲列表 + 拖放 + DPI + 右键菜单 + 失焦隐藏
@@ -113,6 +114,14 @@ MiniLaunch/src/
 14. **截图验证**：`PrintWindow` 用 flag `2`（PW_RENDERFULLCONTENT）会把遮挡窗口一起拍进来；本仓库用 flag `0` 只渲染自身。`FindWindowW` 在本机某些进程里查不到类名窗口，脚本一律用 `EnumWindows` 按类名找。另外 `PrintWindow` 抓原生 `EDIT` 子控件时偶发空白（同一状态重拍就好），所以截图判读搜索框文字时要多拍几次再下结论。
 15. **W 版 API 必须写 `CharSet = CharSet.Unicode`**：漏了它，`StringBuilder` 会按 ANSI/GBK 解码 UTF-16 字节流，`"docker"` 会读成 `"d"`（表现为「只能按首字母搜索」）。新增任何带 `string`/`StringBuilder` 的 `DllImport` 都要检查这一点。
 16. **单行 `EDIT` 的文字贴客户区顶部**：`EM_SETRECT(NP)` 只对多行控件生效，要垂直居中只能把控件本身按行高摆好（见 `LayoutEdit`）。
+17. **高版本系统 API 必须降级**：`SetProcessDpiAwarenessContext`（Win10 1703+）、`GetDpiForWindow`（Win10 1607+）在老系统上直接 P/Invoke 会抛 `EntryPointNotFoundException` **直接崩**。统一走 `Dpi.EnableAwareness()`（降级到 `SetProcessDPIAware`）与 `Dpi.ForWindow()`（降级到 `GetDeviceCaps(LOGPIXELSX)`）；`DwmSetWindowAttribute`（Win8+）已在 `Theme.ApplyModernFrame` 的 try/catch 里。
+
+## 运行环境兼容性
+
+- **不依赖 .NET 环境**：发布用 `--self-contained`，运行时打包进 exe（单文件约 12MB）；单文件不解压到磁盘（原生库直接内存映射）。
+- **Win10 1607+ / Win11**：支持（.NET 8 官方最低 Win10 1607；本程序实际最低 Win10 1607，DPI 已降级兼容）。Win10 1703+ 走 Per-Monitor V2。
+- **Win7 / 8.1**：不支持。.NET 8 运行时本身就不支持（Win7 最后能跑的是 .NET 5/6，且已 EOL）；要适配需改目标框架到 net48，而 JSON 源生成依赖 `System.Text.Json`（net48 必须引 NuGet 包，与「禁止任何 NuGet 包」矛盾），成本过高，不建议。
+- **其他架构**：本机已装 `win-x86` / `win-arm64` apphost 包，加 `-r win-x86` 等即可发布对应版本。
 
 ## UI 结构（MainWindow）
 
@@ -137,7 +146,7 @@ _footerY/_footerH   底部快捷键栏（38）
 ## 工作方式约定
 
 - 先读 `方案.md` / `详细计划.md` / `审查记录.md` 再动结构性代码；功能裁剪清单在 `方案.md` 第八节（插件/剪贴板/截图/同步等**明确不做**）。
-- 改动完成的标准：`dotnet build` 0 警告 0 错误 + `--selftest` 全绿（当前基线 35 项通过）。新增能力时同步加断言到 `SelfTest.cs`。
+- 改动完成的标准：`dotnet build` 0 警告 0 错误 + `--selftest` 全绿（当前基线 38 项通过）。新增能力时同步加断言到 `SelfTest.cs`。
 - 注释与 UI 文案用中文，风格与现有文件一致（`file-scoped namespace`、`static` 工具类、紧凑写法）。
 - 本地 git 仓库已初始化（分支 `master`）；提交前先跑构建与自检，提交信息用中文简述「做了什么 + 为什么」。
 - 本机 bash 输出可能被 rtk 钩子压缩（行被折叠成裸花括号），需要看完整源码请用 read 工具而非 cat/head。

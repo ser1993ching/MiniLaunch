@@ -410,7 +410,7 @@ public sealed class MainWindow
     void OnCreate(IntPtr h)
     {
         Hwnd = h;
-        uint dpi = Win32.GetDpiForWindow(h);
+        uint dpi = Dpi.ForWindow(h);
         RecalcMetrics(dpi / 96f);
         CreateFonts();
         CreateBrushes();

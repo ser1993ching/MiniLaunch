@@ -208,5 +208,25 @@ public static class SelfTest
         IntPtr appIcon = AppIcon.Load();
         Check(appIcon != IntPtr.Zero, "应用图标：exe 模块资源可加载");
         if (appIcon != IntPtr.Zero) Win32.DestroyIcon(appIcon);
+
+        // ---- 14. DPI 兼容兜底（Win10 1703 以前无 SetProcessDpiAwarenessContext / 1607 以前无 GetDpiForWindow）----
+        try
+        {
+            Dpi.EnableAwareness();
+            Check(true, "DPI 感知设置不抛异常");
+        }
+        catch (Exception ex) { Check(false, "DPI 感知设置不抛异常", ex.GetType().Name); }
+
+        IntPtr hDpi = Win32.CreateWindowExW(0, "STATIC", "", Win32.WS_POPUP, 0, 0, 10, 10,
+            IntPtr.Zero, IntPtr.Zero, Win32.GetModuleHandleW(null), IntPtr.Zero);
+        if (hDpi != IntPtr.Zero)
+        {
+            uint dpi1 = Dpi.ForWindow(hDpi);
+            uint dpi2 = Dpi.FromDeviceCaps(hDpi);
+            Check(dpi1 >= 48 && dpi1 <= 480, "窗口 DPI 读取合理", $"GetDpiForWindow={dpi1}");
+            Check(dpi2 >= 48 && dpi2 <= 480, "DPI 兜底路径（GetDeviceCaps）可用", $"={dpi2}");
+            Win32.DestroyWindow(hDpi);
+        }
+        else Check(false, "创建窗口用于 DPI 自检");
     }
 }
