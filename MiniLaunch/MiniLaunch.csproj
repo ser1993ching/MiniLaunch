@@ -11,6 +11,8 @@
     <AssemblyName>MiniLaunch</AssemblyName>
     <!-- 应用清单：comctl32 v6 视觉样式（EDIT 占位提示 / 现代菜单） -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- 应用图标（由 tools/make_icon.py 生成）：资源管理器/任务栏/托盘共用 -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <!-- 源文件为 UTF-8（防系统 GBK 代码页导致中文字面量乱码） -->
     <CodePage>65001</CodePage>
     <!-- 体积/内存优化 -->

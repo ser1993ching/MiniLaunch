@@ -39,6 +39,7 @@ public sealed class MainWindow
     int _w, _h, _pad, _rowH, _icon, _radius;
     int _searchTop, _searchH, _dividerY, _listTop, _footerY, _footerH;
     IntPtr _fontMain, _fontSub, _fontEdit, _fontSmall, _fontKey;
+    IntPtr _appIcon;
     IntPtr _brushHover, _brushSel, _brushEditBg, _brushCap, _brushTrack, _brushThumb, _brushBorder;
 
     MainWindow(AppConfig cfg, SearchEngine search, IconCache icons, Action<Entry, bool> onLaunch, Action rescan, Action<string[]> addFiles)
@@ -399,6 +400,7 @@ public sealed class MainWindow
                 DeleteFonts();
                 foreach (var b in Brushes)
                     if (b != IntPtr.Zero) Win32.DeleteObject(b);
+                if (_appIcon != IntPtr.Zero) { Win32.DestroyIcon(_appIcon); _appIcon = IntPtr.Zero; }
                 Win32.PostQuitMessage(0);
                 return IntPtr.Zero;
         }
@@ -412,6 +414,14 @@ public sealed class MainWindow
         RecalcMetrics(dpi / 96f);
         CreateFonts();
         CreateBrushes();
+
+        // 窗口图标（Alt+Tab / 任务栏预览）：与托盘同一来源
+        _appIcon = AppIcon.Load();
+        if (_appIcon != IntPtr.Zero)
+        {
+            Win32.SendMessageW(h, Win32.WM_SETICON, IntPtr.Zero, _appIcon);   // ICON_SMALL
+            Win32.SendMessageW(h, Win32.WM_SETICON, (IntPtr)1, _appIcon);      // ICON_BIG
+        }
 
         IntPtr hinst = Win32.GetModuleHandleW(null);
         // 搜索框：胶囊形 EDIT，左侧留出放大镜图标

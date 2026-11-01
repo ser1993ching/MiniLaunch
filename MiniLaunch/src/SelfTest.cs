@@ -185,5 +185,28 @@ public static class SelfTest
             Win32.DestroyWindow(he);
         }
         else Check(false, "创建 EDIT 用于文本封送回归", "CreateWindowExW 失败");
+
+        // ---- 12. 应用图标（内嵌于 exe，资源管理器 / 任务栏 / 托盘共用）----
+        string? selfExe = Environment.ProcessPath;
+        if (!string.IsNullOrEmpty(selfExe))
+        {
+            uint iconCount = Win32.ExtractIconExW(selfExe, -1, null, null, 0);
+            Check(iconCount > 0, "exe 内嵌应用图标可提取", $"图标数={iconCount}");
+
+            // 托盘图标即取自自身 exe（见 Tray.MakeNid），此处确认该链路可用
+            var fi = new Win32.SHFILEINFOW();
+            IntPtr r = Win32.SHGetFileInfoW(selfExe, 0, ref fi,
+                (uint)Marshal.SizeOf<Win32.SHFILEINFOW>(),
+                Win32.SHGFI_ICON | Win32.SHGFI_LARGEICON);
+            Check(r != IntPtr.Zero && fi.hIcon != IntPtr.Zero, "托盘图标来源可用（SHGetFileInfo 取自身 exe 图标）");
+            if (fi.hIcon != IntPtr.Zero) Win32.DestroyIcon(fi.hIcon);
+        }
+        else Check(false, "获取自身可执行文件路径");
+
+        // ---- 13. 应用图标加载（exe 模块内的 Win32 图标资源）----
+        // 单文件发布且开启 PublishReadyToRun 时 SDK 会丢弃图标资源，此断言能第一时间发现
+        IntPtr appIcon = AppIcon.Load();
+        Check(appIcon != IntPtr.Zero, "应用图标：exe 模块资源可加载");
+        if (appIcon != IntPtr.Zero) Win32.DestroyIcon(appIcon);
     }
 }

@@ -20,17 +20,7 @@ public static class Tray
     static Win32.NOTIFYICONDATAW MakeNid(string tip, bool showIcon)
     {
         if (_icon == IntPtr.Zero && showIcon)
-        {
-            try
-            {
-                string exe = Environment.ProcessPath ?? "explorer.exe";
-                var fi = new Win32.SHFILEINFOW();
-                IntPtr r = Win32.SHGetFileInfoW(exe, 0, ref fi, (uint)Marshal.SizeOf<Win32.SHFILEINFOW>(),
-                    Win32.SHGFI_ICON | Win32.SHGFI_LARGEICON);
-                if (r != IntPtr.Zero) _icon = fi.hIcon;
-            }
-            catch { }
-        }
+            _icon = LoadAppIcon();
         var nid = new Win32.NOTIFYICONDATAW
         {
             hWnd = _hwnd,
@@ -42,6 +32,23 @@ public static class Tray
         };
         nid.cbSize = Marshal.SizeOf<Win32.NOTIFYICONDATAW>();
         return nid;
+    }
+
+    /// <summary>取应用图标：exe 模块资源 → 内嵌 ico → exe 关联图标（兑底）。</summary>
+    static IntPtr LoadAppIcon()
+    {
+        IntPtr h = AppIcon.Load();
+        if (h != IntPtr.Zero) return h;
+        try
+        {
+            string exe = Environment.ProcessPath ?? "explorer.exe";
+            var fi = new Win32.SHFILEINFOW();
+            IntPtr r = Win32.SHGetFileInfoW(exe, 0, ref fi, (uint)Marshal.SizeOf<Win32.SHFILEINFOW>(),
+                Win32.SHGFI_ICON | Win32.SHGFI_LARGEICON);
+            if (r != IntPtr.Zero) return fi.hIcon;
+        }
+        catch { }
+        return IntPtr.Zero;
     }
 
     public static void Destroy()

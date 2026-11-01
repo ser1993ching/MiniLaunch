@@ -11,6 +11,7 @@ internal static class Win32
     public const int WM_NULL = 0x0000;
     public const int WM_CREATE = 0x0001;
     public const int WM_DESTROY = 0x0002;
+    public const int WM_SETICON = 0x0080;
     public const int WM_SIZE = 0x0005;
     public const int WM_ACTIVATE = 0x0006;
     public const int WM_QUERYENDSESSION = 0x0011;
@@ -410,6 +411,19 @@ internal static class Win32
     // ===== kernel32 =====
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern IntPtr GetModuleHandleW(string? lpModuleName);
+
+    // ===== 图标 =====
+    /// <summary>加载图标：hInst 非空时 lpszName 为资源 ID（MAKEINTRESOURCE 形式），否则为文件路径。</summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr LoadImageW(IntPtr hInst, IntPtr lpszName, uint uType, int cxDesired, int cyDesired, uint fuFlags);
+    public const uint IMAGE_ICON = 1;
+    public const uint LR_DEFAULTSIZE = 0x00000040;
+
+    /// <summary>用内存中的 DIB（RT_ICON 资源内容）创建 HICON；hModule 传 IntPtr.Zero。</summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr CreateIconFromResourceEx(IntPtr hModule, IntPtr lpIconInfo,
+        [MarshalAs(UnmanagedType.Bool)] bool fIcon, uint dwVersion, int cxDesired, int cyDesired, ushort wFlags);
+    public const uint ICON_RESOURCE_VERSION = 0x00030000;
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern IntPtr GetStdHandle(int nStdHandle);
     [DllImport("kernel32.dll", SetLastError = true)]

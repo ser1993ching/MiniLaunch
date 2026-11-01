@@ -21,9 +21,9 @@ cd MiniLaunch && dotnet build
 MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --selftest
 # 报告：会产生 selftest-report.txt（结论同时写 stdout 管道）
 
-# 发布单文件（自包含 + 裁剪 + R2R，15MB 左右）
+# 发布单文件（自包含 + 裁剪，12MB 左右；不要开 R2R，见下方「应用图标」）
 dotnet publish -c Release -r win-x64 --self-contained \
-  -p:PublishSingleFile=true -p:PublishTrimmed=true -p:PublishReadyToRun=true \
+  -p:PublishSingleFile=true -p:PublishTrimmed=true \
   -o ../../publish/win-x64
 ```
 
@@ -46,6 +46,20 @@ python tools/rows.py C:\temp\shot.png
 发布时允许的唯一已知告警：`IL2008 System.Diagnostics.FileVersionInfo ... System.SR`（无害）。若新增裁剪告警，必须逐条核对是否因引入反射。
 NativeAOT（`publish-aot.cmd`）**尚未创建**，需先装 VC 工具链。
 
+## 应用图标
+
+- 图标源文件 `MiniLaunch/app.ico`（10 个尺寸：16~256，≤128 为 32 位 BMP，256 为 PNG），
+  由 `tools/make_icon.py` 用 Pillow 离线生成（**改图标只改脚本再重跑**，不要手改 .ico）：
+  `python tools/make_icon.py` → 重新生成 `MiniLaunch/app.ico` + `tools/icon-preview.png` + `tools/icon-sizes.png`。
+- 注入方式：csproj 的 `<ApplicationIcon>app.ico</ApplicationIcon>` → csc 以 `/win32icon` 嵌入程序集
+  （`RT_GROUP_ICON` 的资源 ID 固定 **32512**）→ SDK 的 `CreateAppHost` 再把它复制进 exe。
+- 运行时取图标：`AppIcon.Load()` 用 `LoadImageW(GetModuleHandle(null), 32512, IMAGE_ICON)`；
+  托盘用 `Tray`，主窗口用 `WM_SETICON`。
+- **坑**：单文件发布 + `PublishReadyToRun=true` 时，SDK 打包器（HostModel.Bundle）会重建宿主 exe
+  并**丢弃图标资源**（PE 里只剩 RCDATA/VERSION/MANIFEST）；不开 R2R 则图标正常。
+  本项目 R2R 收益很小（常驻进程，热键唤醒不走启动路径），所以发布命令不带 R2R。
+  `--selftest` 里有「应用图标：exe 模块资源可加载」断言，发布配置回归时会第一时间报红。
+
 ## 目录
 
 ```
@@ -58,6 +72,7 @@ MiniLaunch/src/
   Pinyin.cs      常见中文软件别名表（wx→微信），不引全量拼音表
   Search.cs      分词 AND 匹配 + 打分（名前缀 100 > 名包含 80+位置 > 别名 60 > 路径 30；+log2(1+Count)*12；24h 内 +15）
   IconCache.cs   HICON 提取（SHGetFileInfo / ExtractIconEx）+ LRU(64)，驱逐时 DestroyIcon
+  AppIcon.cs     应用图标加载（exe 模块 RT_GROUP_ICON 32512 → LoadImageW）
   Launcher.cs    ShellExecuteEx 封装（runas / 工作目录 / explorer /select）
   Theme.cs       配色表 + GDI 绘制工具（竖向渐变 / 圆角填充 / 按键帽 / 放大镜 / DWM 圆角）
   MainWindow.cs  无边框 WS_POPUP + 原生 EDIT 子类化 + 自绘双缓冲列表 + 拖放 + DPI + 右键菜单 + 失焦隐藏
@@ -67,6 +82,8 @@ MiniLaunch/src/
   SelfTest.cs    --selftest 全部断言
 方案.md / 详细计划.md / 审查记录.md   设计依据与已知问题处置（改架构前先读）
 ```
+
+`MiniLaunch/app.ico` 为应用图标（生成脚本 `tools/make_icon.py`，见「应用图标」）。
 
 ## 运行时数据
 
@@ -120,7 +137,7 @@ _footerY/_footerH   底部快捷键栏（38）
 ## 工作方式约定
 
 - 先读 `方案.md` / `详细计划.md` / `审查记录.md` 再动结构性代码；功能裁剪清单在 `方案.md` 第八节（插件/剪贴板/截图/同步等**明确不做**）。
-- 改动完成的标准：`dotnet build` 0 警告 0 错误 + `--selftest` 全绿（当前基线 31 项通过）。新增能力时同步加断言到 `SelfTest.cs`。
+- 改动完成的标准：`dotnet build` 0 警告 0 错误 + `--selftest` 全绿（当前基线 35 项通过）。新增能力时同步加断言到 `SelfTest.cs`。
 - 注释与 UI 文案用中文，风格与现有文件一致（`file-scoped namespace`、`static` 工具类、紧凑写法）。
 - 本地 git 仓库已初始化（分支 `master`）；提交前先跑构建与自检，提交信息用中文简述「做了什么 + 为什么」。
 - 本机 bash 输出可能被 rtk 钩子压缩（行被折叠成裸花括号），需要看完整源码请用 read 工具而非 cat/head。
