@@ -295,9 +295,9 @@ A：确认没有开启 `PublishReadyToRun`，并确认用的是**最新**产物�
 
 ## 📄 许可 / License
 
-本仓库暂未附带 LICENSE 文件。发布到公开仓库前请先补充一份许可协议（例如 MIT）。
+[MIT License](LICENSE) — Copyright (c) 2026 yangwei
 
-No LICENSE file is bundled yet. Add one (e.g. MIT) before publishing to a public repository.
+本项目采用 MIT 许可协议。 / Released under the MIT License.
 
 ---
 
