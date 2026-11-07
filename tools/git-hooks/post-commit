@@ -88,11 +88,45 @@ dry=""
 [ "${ML_AUTOPUSH_DRYRUN:-0}" = "1" ] && dry="--dry-run"
 
 if git rev-parse --verify --quiet '@{u}' >/dev/null 2>&1; then
+  upstream=$(git rev-parse '@{u}')
   ahead=$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)
+  behind=$(git rev-list --count 'HEAD..@{u}' 2>/dev/null || echo 0)
+
   if [ "$ahead" = "0" ]; then
     say "跳过：$branch 没有新提交"
     exit 0
   fi
+
+  if [ "$behind" != "0" ]; then
+    # 本地与远端已分叉：只有一种情况可以安全处理——刚 amend 了最后一次提交。
+    # amend 后的新提交与远端旧提交是「兄弟节点」（共享同一个父提交），
+    # 即 HEAD^ == @{u}^；这种情况用 --force-with-lease 强推最安全，
+    # 若远端在此期间被别人动过，lease 会拒绝，不会覆盖他人提交。
+    is_amend=no
+    head_parent=$(git rev-parse --verify --quiet 'HEAD^' 2>/dev/null || echo "")
+    up_parent=$(git rev-parse --verify --quiet '@{u}^' 2>/dev/null || echo "")
+    head_prev=$(git rev-parse --verify --quiet 'HEAD~1' 2>/dev/null || echo "")
+    if [ -n "$head_parent" ] && [ "$head_parent" = "$up_parent" ]; then is_amend=yes; fi
+    if [ "$is_amend" = "no" ] && [ -n "$head_prev" ] && [ "$head_prev" = "$upstream" ]; then is_amend=yes; fi
+
+    if [ "$is_amend" = "yes" ]; then
+      if ! out=$(git push $dry --force-with-lease "$remote" "HEAD:refs/heads/$branch" 2>&1); then
+        say "推送失败：$remote $branch"
+        printf '%s\n' "$out" | sed 's/^/    /' >&2
+        exit 0
+      fi
+      if [ -n "$dry" ]; then
+        say "试运行：$remote $branch 可推送（amend 改写，dry-run）"
+      else
+        say "已推送到 $remote $branch（amend 改写，已用 --force-with-lease）"
+      fi
+      exit 0
+    fi
+    say "跳过：本地与远端已分叉（远端多出 $behind 个提交），未自动推送"
+    say "    请手动处理：git pull --rebase $remote $branch   或   git push --force-with-lease $remote $branch"
+    exit 0
+  fi
+
   if ! out=$(git push $dry "$remote" "HEAD:refs/heads/$branch" 2>&1); then
     say "推送失败：$remote $branch"
     printf '%s\n' "$out" | sed 's/^/    /' >&2
