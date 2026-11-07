@@ -15,3 +15,7 @@ selftest-report.txt
 # 会话/临时文件
 pi-session-*.html
 *.tmp
+# 仅本地保留的设计文档（不发布到仓库）
+/方案.md
+/详细计划.md
+/审查记录.md

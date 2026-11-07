@@ -288,9 +288,7 @@ A：确认没有开启 `PublishReadyToRun`，并确认用的是**最新**产物�
 
 | 文档 | 内容 |
 | --- | --- |
-| [`方案.md`](方案.md) | 总体方案，第八节列出了**明确不做**的功能清单（插件 / 剪贴板 / 截图 / 同步等） |
-| [`详细计划.md`](详细计划.md) | 分阶段实施计划 |
-| [`审查记录.md`](审查记录.md) | 已知问题与处置结论 |
+| `方案.md`、`详细计划.md`、`审查记录.md` | 总体方案 / 分阶段计划 / 已知问题处置。**仅本地保留，不发布到仓库**（内部工作文档） |
 | [`AGENTS.md`](AGENTS.md) | 面向 AI/协作者的工程约定与「易踩的坑」清单 |
 
 ---
@@ -396,4 +394,4 @@ Windows 10 1607+ / Windows 11. Windows 7 and 8.1 are not supported (the .NET 8 r
 - Scanning runs in two phases: Start Menu + Registry (~30 ms) publish immediately, while UWP (which needs PowerShell, ~1.3 s) waits until the window has been shown for the first time.
 - Icon `HICON`s are created and destroyed **only on the UI thread**, so a cache eviction can never pull an icon out from under a paint operation.
 
-See [`方案.md`](方案.md), [`详细计划.md`](详细计划.md), [`审查记录.md`](审查记录.md) and [`AGENTS.md`](AGENTS.md) for the full design rationale.
+See [`AGENTS.md`](AGENTS.md) for the full design rationale, the engineering conventions and the "pitfalls" list. The internal design documents (`方案.md` / `详细计划.md` / `审查记录.md`) are kept locally and are not published in this repository.
