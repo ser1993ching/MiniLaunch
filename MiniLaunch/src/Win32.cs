@@ -493,6 +493,7 @@ internal static class Win32
     public const int VK_LWIN = 0x5B, VK_RWIN = 0x5C, VK_TAB = 0x09, VK_BACK = 0x08;
     public const int VK_LEFT = 0x25, VK_RIGHT = 0x27;
     public const int WM_KEYUP = 0x0101, WM_SYSKEYDOWN = 0x0104, WM_SYSKEYUP = 0x0105;
+    public const int WM_CHAR = 0x0102;   // TranslateMessage 由 WM_KEYDOWN 派生，wParam 是字符码
     public const int WM_KILLFOCUS = 0x0008;
     public const int CS_DROPSHADOW = 0x00020000;
     public const int EM_SETCUEBANNER = 0x1501;

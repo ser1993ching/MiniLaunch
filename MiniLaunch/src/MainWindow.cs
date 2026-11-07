@@ -794,6 +794,10 @@ public sealed class MainWindow
                 case Win32.VK_ESCAPE: self.HideWin(); return IntPtr.Zero;
             }
         }
+        // Esc 的 WM_KEYDOWN 被上面吃掉后，TranslateMessage 仍会派生一条 WM_CHAR(27) 投给 EDIT；
+        // EDIT 对未处理的控制字符会走默认路径 MessageBeep —— 就是用户听到的那声「退出提示音」。
+        // 只拦 WM_KEYDOWN 不够，这条 WM_CHAR 必须一起吞掉（wParam 就是字符码 27）。
+        if (msg == Win32.WM_CHAR && (int)w == Win32.VK_ESCAPE) return IntPtr.Zero;
         return Win32.DefSubclassProc(h, msg, w, l);
     }
 }
