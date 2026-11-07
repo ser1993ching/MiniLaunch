@@ -17,6 +17,15 @@ public static class Tray
         _added = Win32.Shell_NotifyIconW(Win32.NIM_ADD, ref nid);
     }
 
+    /// <summary>explorer 重启后重建托盘图标（主窗口收到 TaskbarCreated 广播时调用）。
+    /// 不处理的话 explorer 崩溃/重启后托盘入口永久丢失。</summary>
+    public static void Readd()
+    {
+        if (_hwnd == IntPtr.Zero) return;
+        var nid = MakeNid("MiniLaunch 启动器", showIcon: true);
+        _added = Win32.Shell_NotifyIconW(Win32.NIM_ADD, ref nid);
+    }
+
     static Win32.NOTIFYICONDATAW MakeNid(string tip, bool showIcon)
     {
         if (_icon == IntPtr.Zero && showIcon)

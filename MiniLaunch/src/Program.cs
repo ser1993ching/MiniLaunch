@@ -38,6 +38,21 @@ public static class Program
             return SelfTest.Run();
 
         Paths.EnsureDir();
+
+        // 单实例检查必须先于配置读写/自愈：否则第二实例也会跑 HealAutoStart
+        // 并写 config/报告，与主实例竞争写盘。
+        using var mutex = new Mutex(true, MutexName, out bool createdNew);
+        if (!createdNew)
+        {
+            try
+            {
+                using var ev = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
+                ev.Set();
+            }
+            catch { }
+            return 0;
+        }
+
         bool firstRun = !File.Exists(Paths.ConfigPath);
         _startupDiag = $"firstRun={firstRun} | Dir={Paths.Dir} | ConfigPath={Paths.ConfigPath} | Exists={File.Exists(Paths.ConfigPath)} | APPDATA={Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)}";
         _cfg = ConfigStore.LoadConfig();
@@ -50,18 +65,6 @@ public static class Program
         HealAutoStart(configExists: !firstRun);
         _search = new SearchEngine(_usage);
         _icons = new IconCache();
-
-        using var mutex = new Mutex(true, MutexName, out bool createdNew);
-        if (!createdNew)
-        {
-            try
-            {
-                using var ev = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
-                ev.Set();
-            }
-            catch { }
-            return 0;
-        }
 
         Dpi.EnableAwareness();
 
@@ -135,14 +138,21 @@ public static class Program
     {
         try
         {
+            // 句柄只建一次：每轮循环重建会在 dispose/重建的间隙丢掉第二实例的信号
+            using var ev = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
             while (true)
             {
-                using var ev = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
                 if (ev.WaitOne() && _win != null)
                     Win32.PostMessageW(_win.Hwnd, Win32.WM_APP_SHOW, IntPtr.Zero, IntPtr.Zero);
             }
         }
         catch { }
+    }
+
+    /// <summary>用量落盘（WM_QUERYENDSESSION 调用；强制关机时 ProcessExit 不保证执行）。</summary>
+    public static void FlushUsage()
+    {
+        try { ConfigStore.SaveUsage(_usage); } catch { }
     }
 
     public static void OnLaunch(Entry e, bool runAs)
@@ -214,6 +224,8 @@ public static class Program
             string ext = Path.GetExtension(f).ToLowerInvariant();
             bool isDir = Directory.Exists(f);
             if (ext != ".exe" && ext != ".lnk" && ext != ".url" && !isDir) continue;
+            // 去重：重复拖入同一文件不应在 config.json 里累积重复条目
+            if (_cfg.Custom.Any(c => c.Path.Equals(f, StringComparison.OrdinalIgnoreCase))) continue;
             string name = Path.GetFileNameWithoutExtension(f);
             if (ext == ".exe")
             {

@@ -71,15 +71,15 @@ public sealed class SearchEngine
 
     int IdleCompare(Entry a, Entry b)
     {
-        long ka = IdleKey(a), kb = IdleKey(b);
-        if (ka != kb) return kb.CompareTo(ka);
+        // 先比次数、再比最近时间（设计：(Count, LastTicks) 字典序）。
+        // 不能把 Count 加权拼进一个 long：Ticks≈6.4e17，次数权重会被完全淹没，
+        // 退化成「最近使用」排序（历史 bug，自检有空查询回归断言）。
+        _usage.Recs.TryGetValue(a.UniqueKey, out var ra);
+        _usage.Recs.TryGetValue(b.UniqueKey, out var rb);
+        int ca = ra?.Count ?? 0, cb = rb?.Count ?? 0;
+        if (ca != cb) return cb.CompareTo(ca);
+        long la = ra?.LastTicks ?? 0, lb = rb?.LastTicks ?? 0;
+        if (la != lb) return lb.CompareTo(la);
         return string.CompareOrdinal(a.NameLower, b.NameLower);
-    }
-
-    long IdleKey(Entry e)
-    {
-        long c = 0, last = 0;
-        if (_usage.Recs.TryGetValue(e.UniqueKey, out var r)) { c = r.Count; last = r.LastTicks; }
-        return c * 10_000_000_000L + last;
     }
 }

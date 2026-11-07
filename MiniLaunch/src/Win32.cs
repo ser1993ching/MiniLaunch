@@ -223,6 +223,10 @@ internal static class Win32
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern ushort RegisterClassW(ref WNDCLASSW lpWndClass);
 
+    /// <summary>注册系统广播消息（如 TaskbarCreated），返回消息 ID。</summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern uint RegisterWindowMessageW(string lpString);
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern IntPtr CreateWindowExW(uint dwExStyle, string lpClassName, string lpWindowName, uint dwStyle,
         int x, int y, int nWidth, int nHeight, IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
@@ -434,12 +438,6 @@ internal static class Win32
     public static extern IntPtr LoadImageW(IntPtr hInst, IntPtr lpszName, uint uType, int cxDesired, int cyDesired, uint fuFlags);
     public const uint IMAGE_ICON = 1;
     public const uint LR_DEFAULTSIZE = 0x00000040;
-
-    /// <summary>用内存中的 DIB（RT_ICON 资源内容）创建 HICON；hModule 传 IntPtr.Zero。</summary>
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    public static extern IntPtr CreateIconFromResourceEx(IntPtr hModule, IntPtr lpIconInfo,
-        [MarshalAs(UnmanagedType.Bool)] bool fIcon, uint dwVersion, int cxDesired, int cyDesired, ushort wFlags);
-    public const uint ICON_RESOURCE_VERSION = 0x00030000;
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern IntPtr GetStdHandle(int nStdHandle);
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -452,6 +450,8 @@ internal static class Win32
     public const uint GMEM_MOVEABLE = 0x2;
     [DllImport("kernel32.dll")] public static extern IntPtr GlobalLock(IntPtr hMem);
     [DllImport("kernel32.dll")] public static extern bool GlobalUnlock(IntPtr hMem);
+    /// <summary>释放 GlobalAlloc 的内存（剪贴板写入失败时所有权未转移，必须自己释放）。</summary>
+    [DllImport("kernel32.dll")] public static extern IntPtr GlobalFree(IntPtr hMem);
 
     // ===== shell32 =====
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
@@ -485,7 +485,7 @@ internal static class Win32
     // ===== 追加：按键状态 / 键名 =====
     [DllImport("user32.dll")] public static extern short GetKeyState(int nVirtKey);
     [DllImport("user32.dll")] public static extern uint MapVirtualKeyW(uint uCode, uint uMapType);
-    public const uint MAPVK_VK_TO_VSC = 0;
+    public const uint MAPVK_VK_TO_VSC = 0, MAPVK_VK_TO_VSC_EX = 4;
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern int GetKeyNameTextW(int lParam, [Out] StringBuilder lpString, int nSize);
 

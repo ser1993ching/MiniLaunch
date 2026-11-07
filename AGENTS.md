@@ -30,7 +30,7 @@ dotnet publish -c Release -r win-x64 --self-contained \
   -o "E:\code\_tmp_publish"
 cp /e/code/_tmp_publish/MiniLaunch.exe /e/code/_tmp_publish/MiniLaunch.pdb \
    "/e/code/启动器/publish/win-x64/"
-# 发布后必须核对：./MiniLaunch.exe --selftest 应显示 45 项通过（拿到旧产物会显示 38）
+# 发布后必须核对：./MiniLaunch.exe --selftest 应显示 60 项通过（拿到旧产物会显示 45/38）
 ```
 
 开发辅助（仅调试用，发布不包含）：
@@ -122,12 +122,15 @@ MiniLaunch/src/
 15. **W 版 API 必须写 `CharSet = CharSet.Unicode`**：漏了它，`StringBuilder` 会按 ANSI/GBK 解码 UTF-16 字节流，`"docker"` 会读成 `"d"`（表现为「只能按首字母搜索」）。新增任何带 `string`/`StringBuilder` 的 `DllImport` 都要检查这一点。
 16. **单行 `EDIT` 的文字贴客户区顶部**：`EM_SETRECT(NP)` 只对多行控件生效，要垂直居中只能把控件本身按行高摆好（见 `LayoutEdit`）。
 17. **高版本系统 API 必须降级**：`SetProcessDpiAwarenessContext`（Win10 1703+）、`GetDpiForWindow`（Win10 1607+）在老系统上直接 P/Invoke 会抛 `EntryPointNotFoundException` **直接崩**。统一走 `Dpi.EnableAwareness()`（降级到 `SetProcessDPIAware`）与 `Dpi.ForWindow()`（降级到 `GetDeviceCaps(LOGPIXELSX)`）；`DwmSetWindowAttribute`（Win8+）已在 `Theme.ApplyModernFrame` 的 try/catch 里。
-18. **子进程管道必须显式指定编码**：`Process.StandardOutput` 默认按「**父进程控制台代码页**」解码（本机 GBK），而 powershell 按 `[Console]::OutputEncoding=UTF8` 输出的是 UTF-8 → 中文乱码；更糟的是 GBK 双字节解码会把 JSON 里的 `"` 吞掉，抛 `JsonException: FoundInvalidCharacter`，**UWP 列表全丢且缓存永远写不出来**（于是每次启动都白跑一次 1.3s 的 powershell）。必须在 `ProcessStartInfo` 里设 `StandardOutputEncoding = Encoding.UTF8`（同理 `StandardErrorEncoding`）。读 stderr 要用 `ReadToEndAsync` 并行，否则管道写满会死锁。
+18. **子进程管道必须显式指定编码**：`Process.StandardOutput` 默认按「**父进程控制台代码页**」解码（本机 GBK），而 powershell 按 `[Console]::OutputEncoding=UTF8` 输出的是 UTF-8 → 中文乱码；更糟的是 GBK 双字节解码会把 JSON 里的 `"` 吞掉，抛 `JsonException: FoundInvalidCharacter`，**UWP 列表全丢且缓存永远写不出来**（于是每次启动都白跑一次 1.3s 的 powershell）。必须在 `ProcessStartInfo` 里设 `StandardOutputEncoding = Encoding.UTF8`（同理 `StandardErrorEncoding`）。**两条管道都要用 `ReadToEndAsync` 并行读**（只并行 stderr 不够：同步读 stdout 会先无限阻塞，让后面的 `WaitForExit(超时)` 永远轮不到，powershell 挂住时扫描线程永久卡死）；超时判断必须放在同步读之前。schtasks 封装（`AutoStart.RunSchtasks`）同样适用。
 19. **扫描分两阶段**：开始菜单/注册表约 30ms，先发布让窗口有内容；UWP 需拉 powershell（首次 ~1.3s），等窗口首次显示（`Program.NotifyFirstShown`）后再做——开机自启常驻时完全不占启动资源。`uwp-cache.json` 里要有一条**空名哨兵**记录扫描时间戳，否则 0 条时会被当成“无缓存”而每次重跑 powershell。
 20. **开机自启必须“写入后回读校验”**：`Registry.SetValue` 被组策略/安全软件拦截时**不抛异常**，只是不生效——所以写入后必须回读比对，不一致就回滚 UI 状态并提示。菜单勾选状态一律以**注册表**为准（真相源），不是 config.json。
 21. **自启目标要用稳定路径**：`Environment.ProcessPath` 拿到的是“当前正在跑的那个 exe”，在 `bin\Debug` 下就是构建目录，下次 `git clean` 就失效了。托盘菜单「安装到本地并设为开机自启」会把程序复制到 `%LOCALAPPDATA%\MiniLaunch` 再指向它。
 22. **启动时要自愈**：注册表项指向的文件没了（构建目录被清理/搬走/换机）→ 每次启动检查并改写回当前 exe；用户关闭过自启 → 清理注册表残留。`AutoStart.Heal` 的第三个参数是「配置文件**存在**」，而 `firstRun` 是「配置文件**不存在**」，语义相反，传参必须取反。
 23. **自启常驻时窗口可能永远不显示**：`FirstShown` 只在 `MainWindow.ShowWin()` 里 set，所以 `DoScan` 里不能无限 `Wait()`——否则 UWP 扫描永远不执行，UWP 应用永远搜不到。现在改成「首显 或 3 秒超时」先到者触发。
+24. **高 DPI 首显必须 resize 窗口**：窗口按 96 DPI 尺寸创建，`WM_CREATE` 里重算度量后必须 `SetWindowPos` 撑到新 `_w×_h`（主窗口与热键录制窗都要）——`WM_DPICHANGED` 只在 DPI *变化* 时触发，主屏缩放 ≠100% 时首显不会补，底部行/底栏会被裁剪。自检有「主窗口客户区与 DPI 布局一致」断言。
+25. **托盘必须响应 `TaskbarCreated`**：explorer 崩溃/重启后托盘图标全丢，不重建就永久消失。`RegisterWindowMessageW("TaskbarCreated")` 动态注册，主窗口收到后 `Tray.Readd()`。
+26. **空查询排序不能把 Count 拼进 Ticks**：`DateTime.Ticks≈6.4e17`，`Count*1e10` 的权重会被完全淹没，退化成「最近使用」排序。必须先比 Count 再比 LastTicks（拼一个 long 会溢出）。自检有「空查询频率优先于最近使用」回归断言。
 
 ## 运行环境兼容性
 
@@ -159,7 +162,7 @@ _footerY/_footerH   底部快捷键栏（38）
 ## 工作方式约定
 
 - 先读 `方案.md` / `详细计划.md` / `审查记录.md` 再动结构性代码；功能裁剪清单在 `方案.md` 第八节（插件/剪贴板/截图/同步等**明确不做**）。
-- 改动完成的标准：`dotnet build` 0 警告 0 错误 + `--selftest` 全绿（当前基线 45 项通过）。新增能力时同步加断言到 `SelfTest.cs`。
+- 改动完成的标准：`dotnet build` 0 警告 0 错误 + `--selftest` 全绿（当前基线 60 项通过）。新增能力时同步加断言到 `SelfTest.cs`。
 - 提交后会自动推送到 GitHub 和 Gitee（全局 git hook，见 `tools/install-autopush-hook.sh`）：
   每次 `git commit` 触发 `post-commit` → 逐个检查 **github.com / gitee.com** 的远端，
   先判断平台上**是否已创建对应仓库**（GitHub 走 `api.github.com`，Gitee 走 `gitee.com/api/v5`），

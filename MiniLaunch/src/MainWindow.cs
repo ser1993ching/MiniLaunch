@@ -15,6 +15,8 @@ public sealed class MainWindow
 
     static readonly Win32.WndProcDelegate s_wndProc = WndProcStatic;
     static readonly Win32.SubclassProcDelegate s_editProc = EditProcStatic;
+    /// <summary>explorer 重启后的系统广播：托盘图标需要重建（消息 ID 动态注册）。</summary>
+    static readonly uint s_taskbarCreated = Win32.RegisterWindowMessageW("TaskbarCreated");
     static MainWindow? s_this;
     public static MainWindow? Instance => s_this;
 
@@ -34,6 +36,10 @@ public sealed class MainWindow
 
     /// <summary>预览模式（--preview 启动）：不因失焦自动隐藏，便于截图与界面调试。</summary>
     public bool PreviewMode;
+
+    /// <summary>DPI 重算后的布局尺寸（自检用：校验窗口客户区与之一致）。</summary>
+    internal int LayoutWidth => _w;
+    internal int LayoutHeight => _h;
 
     float _scale = 1f;
     int _w, _h, _pad, _rowH, _icon, _radius;
@@ -245,6 +251,7 @@ public sealed class MainWindow
 
     IntPtr WndProc(IntPtr h, uint msg, IntPtr w, IntPtr l)
     {
+        if (msg == s_taskbarCreated) { Tray.Readd(); return IntPtr.Zero; }
         switch (msg)
         {
             case Win32.WM_CREATE:
@@ -349,6 +356,20 @@ public sealed class MainWindow
             case Win32.WM_CONTEXTMENU:
                 if (w == h)
                 {
+                    if (l == new IntPtr(-1))
+                    {
+                        // 键盘呼出（Shift+F10 / 菜单键）：没有坐标，在选中行处弹出
+                        if (_results.Length == 0) return IntPtr.Zero;
+                        int selRow = Math.Clamp(_sel, 0, _results.Length - 1);
+                        var kp = new Win32.POINT
+                        {
+                            X = _pad + Scale(40),
+                            Y = _listTop + (Math.Clamp(selRow, _offset, _offset + VisibleRows - 1) - _offset) * _rowH + _rowH / 2,
+                        };
+                        Win32.ClientToScreen(h, ref kp);
+                        ItemMenu(selRow, kp.X, kp.Y);
+                        return IntPtr.Zero;
+                    }
                     var pt = new Win32.POINT { X = Win32.LOWORD(l), Y = Win32.HIWORD(l) };
                     var client = pt;
                     Win32.ScreenToClient(h, ref client);
@@ -400,7 +421,9 @@ public sealed class MainWindow
                 return IntPtr.Zero;
 
             case Win32.WM_QUERYENDSESSION:
-                break; // 用量由 Program 的 ProcessExit 钩子统一落盘
+                // 关机/注销时 ProcessExit 不保证执行，用量在此先落盘（坑 #8）
+                Program.FlushUsage();
+                break;
 
             case Win32.WM_DESTROY:
                 DeleteFonts();
@@ -418,6 +441,10 @@ public sealed class MainWindow
         Hwnd = h;
         uint dpi = Dpi.ForWindow(h);
         RecalcMetrics(dpi / 96f);
+        // 窗口是按 96 DPI 尺寸创建的；高 DPI 下必须把窗口撑到重算后的尺寸，
+        // 否则底部行/底栏被裁剪。WM_DPICHANGED 只在 DPI *变化* 时触发，首显不会补。
+        Win32.SetWindowPos(h, IntPtr.Zero, 0, 0, _w, _h,
+            Win32.SWP_NOMOVE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
         CreateFonts();
         CreateBrushes();
 
@@ -437,7 +464,9 @@ public sealed class MainWindow
             h, (IntPtr)EditId, hinst, IntPtr.Zero);
         Win32.SetWindowSubclass(_edit, s_editProc, 1, IntPtr.Zero);
         Win32.SendMessageW(_edit, Win32.WM_SETFONT, _fontEdit, (IntPtr)1);
-        Win32.SendMessageW(_edit, Win32.EM_SETCUEBANNER, (IntPtr)1, Marshal.StringToHGlobalUni("搜索应用、文件或命令…"));
+        IntPtr cue = Marshal.StringToHGlobalUni("搜索应用、文件或命令…");
+        Win32.SendMessageW(_edit, Win32.EM_SETCUEBANNER, (IntPtr)1, cue);
+        Marshal.FreeHGlobal(cue); // 系统已复制字符串，立即释放避免泄漏
         LayoutEdit();
         Win32.DragAcceptFiles(h, true);
 
@@ -475,8 +504,11 @@ public sealed class MainWindow
         var files = new List<string>((int)count);
         for (uint i = 0; i < count; i++)
         {
-            var sb = new StringBuilder(260);
-            if (Win32.DragQueryFileW(hDrop, i, sb, 260) > 0)
+            // 先查所需长度，避免 >260 字符的长路径被截断
+            uint len = Win32.DragQueryFileW(hDrop, i, null, 0);
+            if (len == 0) continue;
+            var sb = new StringBuilder((int)len + 1);
+            if (Win32.DragQueryFileW(hDrop, i, sb, len + 1) > 0)
                 files.Add(sb.ToString());
         }
         Win32.DragFinish(hDrop);

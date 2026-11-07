@@ -57,10 +57,12 @@ public static class Launcher
                 IntPtr h = Win32.GlobalAlloc(Win32.GMEM_MOVEABLE, (UIntPtr)bytes.Length);
                 if (h == IntPtr.Zero) return false;
                 IntPtr p = Win32.GlobalLock(h);
-                if (p == IntPtr.Zero) return false;
+                if (p == IntPtr.Zero) { Win32.GlobalFree(h); return false; }
                 try { Marshal.Copy(bytes, 0, p, bytes.Length); }
                 finally { Win32.GlobalUnlock(h); }
-                return Win32.SetClipboardData(Win32.CF_UNICODETEXT, h) != IntPtr.Zero;
+                if (Win32.SetClipboardData(Win32.CF_UNICODETEXT, h) != IntPtr.Zero) return true;
+                Win32.GlobalFree(h); // 失败时所有权未转移给系统，必须自己释放
+                return false;
             }
             finally
             {

@@ -245,10 +245,18 @@ public static class Scanners
             p = Process.Start(psi);
             if (p == null) return null;
             try { p.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
-            // 先并行读 stderr：否则 stderr 管道写满会让子进程卡住（死锁）
+            // 两条管道都并行读：顺序 ReadToEnd 会在另一条管道写满时死锁（坑 #18），
+            // 而且同步读会先无限阻塞，让后面的 WaitForExit 超时永远轮不到。
             var errTask = p.StandardError.ReadToEndAsync();
-            string json = p.StandardOutput.ReadToEnd();
-            if (!p.WaitForExit(20_000)) { try { p.Kill(); } catch { } return null; }
+            var outTask = p.StandardOutput.ReadToEndAsync();
+            if (!p.WaitForExit(20_000))
+            {
+                try { p.Kill(); } catch { }
+                try { p.WaitForExit(3000); } catch { }
+                return null;
+            }
+            // 进程已退出 → stdout 必已关闭，任务会立即完成
+            string json = outTask.GetAwaiter().GetResult();
             try { errTask.Wait(1000); } catch { }
             return ParseStartAppsJson(json);
         }

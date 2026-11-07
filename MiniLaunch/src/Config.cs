@@ -168,11 +168,15 @@ public static class HotkeyParser
     {
         try
         {
-            uint sc = Win32.MapVirtualKeyW(vk, Win32.MAPVK_VK_TO_VSC);
+            // 用 EX 版识别扩展键（方向键/Home/End 等）：GetKeyNameText 需要置 bit 24，
+            // 否则键名会报错（如 Left 报成小键盘 4）
+            uint scEx = Win32.MapVirtualKeyW(vk, Win32.MAPVK_VK_TO_VSC_EX);
+            uint sc = scEx & 0xFF;
             if (sc != 0)
             {
                 var sb = new System.Text.StringBuilder(64);
                 int lp = (int)(sc << 16);
+                if ((scEx & 0xE0) == 0xE0) lp |= 0x1000000; // 扩展键标志
                 if (Win32.GetKeyNameTextW(lp, sb, 64) > 0 && sb.Length > 0)
                     return sb.ToString();
             }

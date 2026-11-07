@@ -173,7 +173,8 @@ public static class SelfTest
         int uwpCount = 0;
         try { uwpCount = Scanners.ScanUwp(true).Count; }
         catch (Exception ex) { Check(false, "UWP 扫描无异常", ex.Message); }
-        Check(uwpCount >= 0, "UWP 扫描执行", $"count={uwpCount}");
+        var (uwpCacheNow, _) = Scanners.ReadUwpCache();
+        Check(uwpCount == uwpCacheNow.Count, "UWP 扫描执行且与磁盘缓存一致", $"count={uwpCount} cache={uwpCacheNow.Count}");
 
         // ---- 6b. UWP JSON 解析容错（BOM / 控制字符 / 孤立代理项）----
         string j1 = "\uFEFF[{\"Name\":\"A\u0001B\",\"AppID\":\"X_1!App\"}]";
@@ -228,6 +229,18 @@ public static class SelfTest
         u.Recs[b.UniqueKey] = new UsageRec { Count = 50, LastTicks = DateTime.UtcNow.Ticks };
         var r6 = eng.Query("chrome", 10);
         Check(r6.Count == 2 && r6[0] == b, "使用频率提升排序");
+
+        // 回归：空查询必须「频率优先」而非「最近使用优先」
+        // （历史 bug：Count 权重拼进 Ticks 的 long 被淹没，30 天前用过 100 次的会输给今天用过 1 次的）
+        var uIdle = new UsageDb();
+        var engIdle = new SearchEngine(uIdle);
+        var eOld = Scanners.Make("老牌常用", @"C:\x\old.exe", "", EntrySource.StartMenu, @"C:\x\old.exe");
+        var eNew = Scanners.Make("新近偶尔", @"C:\y\new.exe", "", EntrySource.StartMenu, @"C:\y\new.exe");
+        uIdle.Recs[eOld.UniqueKey] = new UsageRec { Count = 100, LastTicks = DateTime.UtcNow.Ticks - TimeSpan.FromDays(30).Ticks };
+        uIdle.Recs[eNew.UniqueKey] = new UsageRec { Count = 1, LastTicks = DateTime.UtcNow.Ticks };
+        engIdle.SetEntries(new List<Entry> { eNew, eOld });
+        var rIdle = engIdle.Query("", 10);
+        Check(rIdle.Count == 2 && rIdle[0] == eOld, "空查询频率优先于最近使用", $"r=[{string.Join(",", rIdle.Select(e => e.Name))}]");
 
         // ---- 9. 图标提取 ----
         using (var icons = new IconCache())
@@ -322,5 +335,15 @@ public static class SelfTest
             Win32.DestroyWindow(hDpi);
         }
         else Check(false, "创建窗口用于 DPI 自检");
+
+        // ---- 15. 主窗口布局：客户区必须等于 DPI 重算后的尺寸 ----
+        // 回归：窗口按 96 DPI 创建后只在 WM_CREATE 重算度量却不 resize，
+        // 高 DPI 主屏下底部行/底栏被裁剪（本机 96 DPI 时此断言平凡通过，高 DPI 机器上才有鉴别力）
+        var mw = MainWindow.Create(new AppConfig(), new SearchEngine(new UsageDb()), new IconCache(),
+            (e, ra) => { }, () => { }, files => { });
+        Win32.GetClientRect(mw.Hwnd, out var mrc);
+        Check(mrc.Width == mw.LayoutWidth && mrc.Height == mw.LayoutHeight,
+            "主窗口客户区与 DPI 布局一致", $"client={mrc.Width}x{mrc.Height} layout={mw.LayoutWidth}x{mw.LayoutHeight}");
+        Win32.DestroyWindow(mw.Hwnd);
     }
 }

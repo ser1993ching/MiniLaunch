@@ -51,24 +51,18 @@ public sealed class HotkeyDialog
         };
         Win32.RegisterClassW(ref wc);
 
-        Win32.GetCursorPos(out var pt);
-        IntPtr mon = Win32.MonitorFromPoint(pt, Win32.MONITOR_DEFAULTTONEAREST);
-        var mi = new Win32.MONITORINFO { cbSize = Marshal.SizeOf<Win32.MONITORINFO>() };
-        int waL = 0, waT = 0, waW = 1920, waH = 1080;
-        if (Win32.GetMonitorInfoW(mon, ref mi))
-        {
-            waL = mi.rcWork.L; waT = mi.rcWork.T;
-            waW = mi.rcWork.Width; waH = mi.rcWork.Height;
-        }
-        int x = waL + (waW - self._w) / 2;
-        int y = waT + (waH - self._h) / 2;
-
+        // 定位与 DPI 尺寸统一在 WM_CREATE 里做（创建前还不知道目标显示器 DPI）
         IntPtr hwnd = Win32.CreateWindowExW(
             Win32.WS_EX_TOPMOST | Win32.WS_EX_TOOLWINDOW,
             ClassName, "设置热键", Win32.WS_POPUP,
-            x, y, self._w, self._h,
+            0, 0, self._w, self._h,
             IntPtr.Zero, IntPtr.Zero, hinst, IntPtr.Zero);
-        if (hwnd == IntPtr.Zero) { s_this = null; return; }
+        if (hwnd == IntPtr.Zero)
+        {
+            s_this = null;
+            try { onClose(); } catch { } // 创建失败也要走关闭回调：调用方已注销旧热键，必须重注册
+            return;
+        }
 
         Win32.ShowWindow(hwnd, Win32.SW_SHOW);
         Win32.SetForegroundWindow(hwnd);
@@ -128,6 +122,19 @@ public sealed class HotkeyDialog
                 Hwnd = h;
                 RecalcMetrics(Dpi.ForWindow(h) / 96f);
                 CreateFonts();
+                // 窗口按 96 DPI 尺寸创建：高 DPI 下撑到重算后的尺寸，并在光标所在显示器重新居中
+                Win32.GetCursorPos(out var pt);
+                IntPtr mon = Win32.MonitorFromPoint(pt, Win32.MONITOR_DEFAULTTONEAREST);
+                var mi = new Win32.MONITORINFO { cbSize = Marshal.SizeOf<Win32.MONITORINFO>() };
+                int waL = 0, waT = 0, waW = 1920, waH = 1080;
+                if (Win32.GetMonitorInfoW(mon, ref mi))
+                {
+                    waL = mi.rcWork.L; waT = mi.rcWork.T;
+                    waW = mi.rcWork.Width; waH = mi.rcWork.Height;
+                }
+                Win32.SetWindowPos(h, IntPtr.Zero,
+                    waL + (waW - _w) / 2, waT + (waH - _h) / 2, _w, _h,
+                    Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
                 Theme.ApplyModernFrame(h);
                 return IntPtr.Zero;
             }

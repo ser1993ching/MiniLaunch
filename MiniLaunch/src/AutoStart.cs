@@ -255,9 +255,15 @@ public static class AutoStart
             foreach (string a in args) psi.ArgumentList.Add(a);
             using var p = new System.Diagnostics.Process { StartInfo = psi };
             p.Start();
-            p.StandardOutput.ReadToEnd();
-            p.StandardError.ReadToEnd();
-            p.WaitForExit(timeoutMs);
+            // 两条管道必须并行读（坑 #18 同款）：顺序 ReadToEnd 在 stderr 写满时死锁，
+            // 且同步读会让 WaitForExit 超时失效。输出内容不需要，只要退出码。
+            _ = p.StandardOutput.ReadToEndAsync();
+            _ = p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(timeoutMs))
+            {
+                try { p.Kill(); } catch { }
+                return -1;
+            }
             return p.ExitCode;
         }
         catch { return -1; }
