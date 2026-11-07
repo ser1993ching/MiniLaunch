@@ -155,11 +155,13 @@ _footerY/_footerH   底部快捷键栏（38）
 
 - 先读 `方案.md` / `详细计划.md` / `审查记录.md` 再动结构性代码；功能裁剪清单在 `方案.md` 第八节（插件/剪贴板/截图/同步等**明确不做**）。
 - 改动完成的标准：`dotnet build` 0 警告 0 错误 + `--selftest` 全绿（当前基线 45 项通过）。新增能力时同步加断言到 `SelfTest.cs`。
-- 提交后会自动推送 GitHub（全局 git hook，见 `tools/install-autopush-hook.sh`）：
-  每次 `git commit` 触发 `post-commit` → 先用 `git ls-remote` 判断 **GitHub 上是否已创建对应仓库**，
-  存在才推，不存在则跳过（不报错）；推送到 GitHub 以外的其他远端（如 gitee）需手动 `git push gitee master`，
-  或用 `bash tools/push-all.sh` 一次推到所有远端（origin=GitHub，gitee=Gitee）。
-  单次关闭：`ML_NO_AUTOPUSH=1 git commit ...`；单仓库关闭：`git config autoPush.enabled false`。
+- 提交后会自动推送到 GitHub 和 Gitee（全局 git hook，见 `tools/install-autopush-hook.sh`）：
+  每次 `git commit` 触发 `post-commit` → 逐个检查 **github.com / gitee.com** 的远端，
+  先判断平台上**是否已创建对应仓库**（GitHub 走 `api.github.com`，Gitee 走 `gitee.com/api/v5`），
+  存在才推，不存在则跳过（不报错）；名为 `upstream` 的远端不自动推（那是别人的仓库）。
+  推送到其它平台需手动 `git push <remote> master`。
+  单次关闭：`ML_NO_AUTOPUSH=1 git commit ...`；单仓库关闭：`git config autoPush.enabled false`；
+  演练不真推：`ML_AUTOPUSH_DRYRUN=1 git commit ...`。
 - 注释与 UI 文案用中文，风格与现有文件一致（`file-scoped namespace`、`static` 工具类、紧凑写法）。
 - 本地 git 仓库已初始化（分支 `master`）；提交前先跑构建与自检，提交信息用中文简述「做了什么 + 为什么」。
 - 本机 bash 输出可能被 rtk 钩子压缩（行被折叠成裸花括号），需要看完整源码请用 read 工具而非 cat/head。
