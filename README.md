@@ -25,6 +25,8 @@ Native Win32 self-drawn UI · Zero NuGet packages · Zero reflection · **0% CPU
 
 [低内存](#-低内存--低资源占用--low-memory--low-resource-footprint) · [功能特性](#-功能特性--features) · [界面截图](#-界面截图--screenshots) · [快速开始](#-快速开始--getting-started) · [技术细节](#-技术细节--technical-notes) · [English](#english-readme)
 
+</div>
+
 ---
 
 ## 🧠 低内存 · 低资源占用 / Low Memory · Low Resource Footprint
