@@ -12,6 +12,17 @@
 纯 Win32 原生自绘 UI · 零 NuGet 依赖 · 零反射 · **空闲 CPU 占用 0%**
 Native Win32 self-drawn UI · Zero NuGet packages · Zero reflection · **0% CPU while idle**
 
+<p align="center">
+  <img src="https://img.shields.io/badge/idle_CPU-0.000%25-brightgreen" alt="0.000% idle CPU" />
+  <img src="https://img.shields.io/badge/memory-15.2MB-brightgreen" alt="15.2 MB private memory" />
+  <img src="https://img.shields.io/badge/NuGet_deps-0-brightgreen" alt="Zero NuGet dependencies" />
+  <img src="https://img.shields.io/badge/reflection-none-brightgreen" alt="Zero reflection" />
+  <img src="https://img.shields.io/badge/exe-11.7MB-blue" alt="11.7 MB single file" />
+  <img src="https://img.shields.io/badge/UI-pure_Win32_P%2FInvoke-0078D4" alt="Pure Win32 P/Invoke" />
+  <img src="https://img.shields.io/badge/platform-Windows_10%2B-0078D4" alt="Windows 10+" />
+  <img src="https://img.shields.io/badge/language-C%23-239120" alt="C#" />
+</p>
+
 [低内存](#-低内存--低资源占用--low-memory--low-resource-footprint) · [功能特性](#-功能特性--features) · [界面截图](#-界面截图--screenshots) · [快速开始](#-快速开始--getting-started) · [技术细节](#-技术细节--technical-notes) · [English](#english-readme)
 
 ---
@@ -297,7 +308,14 @@ No LICENSE file is bundled yet. Add one (e.g. MIT) before publishing to a public
 <img src="tools/icon-preview.png" width="80" alt="MiniLaunch icon" />
 
 **MiniLaunch** — a minimal Windows launcher.
-Pure Win32 self-drawn UI · Zero NuGet packages · Zero reflection · Tiny resident footprint
+Pure Win32 self-drawn UI · Zero NuGet packages · Zero reflection · **0% CPU while idle**
+
+<p align="center">
+  <img src="https://img.shields.io/badge/idle_CPU-0.000%25-brightgreen" alt="0.000% idle CPU" />
+  <img src="https://img.shields.io/badge/memory-15.2MB-brightgreen" alt="15.2 MB private memory" />
+  <img src="https://img.shields.io/badge/NuGet_deps-0-brightgreen" alt="Zero NuGet dependencies" />
+  <img src="https://img.shields.io/badge/exe-11.7MB-blue" alt="11.7 MB single file" />
+</p>
 
 </div>
 
