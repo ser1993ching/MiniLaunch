@@ -530,5 +530,9 @@ internal static class Win32
     [DllImport("gdi32.dll")] public static extern int SaveDC(IntPtr hdc);
     [DllImport("gdi32.dll")] public static extern bool RestoreDC(IntPtr hdc, int nSavedDC);
     [DllImport("gdi32.dll")] public static extern int SelectClipRgn(IntPtr hdc, IntPtr hrgn);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int MessageBoxW(IntPtr hWnd, string lpText, string lpCaption, uint uType);
+    public const uint MB_OK = 0x0000, MB_ICONINFORMATION = 0x0040, MB_ICONWARNING = 0x0030, MB_ICONERROR = 0x0010;
 }
 

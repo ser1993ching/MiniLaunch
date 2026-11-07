@@ -71,6 +71,51 @@ public static class SelfTest
         Check(o2 && m2 == (Win32.MOD_CONTROL | Win32.MOD_SHIFT) && v2 == 0x72, "热键解析 Ctrl+Shift+F3");
         Check(!HotkeyParser.Parse("乱码键").ok, "热键解析拒绝非法输入");
 
+        // ---- 1c. 开机自启：命令行解析 / 路径判定 / 注册表往返 ----
+        Check(AutoStart.ParseExeFromCommand("\"C:\\a b\\MiniLaunch.exe\"") == "C:\\a b\\MiniLaunch.exe",
+            "自启命令行解析：带引号路径", AutoStart.ParseExeFromCommand("\"C:\\a b\\MiniLaunch.exe\"") ?? "null");
+        Check(AutoStart.ParseExeFromCommand("C:\\x\\MiniLaunch.exe --flag") == "C:\\x\\MiniLaunch.exe",
+            "自启命令行解析：带参数时取 exe", AutoStart.ParseExeFromCommand("C:\\x\\MiniLaunch.exe --flag") ?? "null");
+        Check(AutoStart.ParseExeFromCommand("") == null && AutoStart.ParseExeFromCommand(null) == null,
+            "自启命令行解析：空值返回 null");
+        Check(AutoStart.SameExe("\"C:\\X\\MiniLaunch.EXE\"", "c:\\x\\minilaunch.exe"),
+            "自启路径比较：忽略大小写与引号");
+        Check(AutoStart.IsBuildOutput("E:\\p\\MiniLaunch\\bin\\Debug\\net8.0-windows\\MiniLaunch.exe"),
+            "自启目标判定：构建目录视为不稳定");        Check(!AutoStart.IsBuildOutput(AutoStart.InstalledExe),
+            "自启目标判定：本地安装目录视为稳定", AutoStart.InstalledExe);
+
+        // 注册表往返：用临时值名，不碰用户真实的 MiniLaunch 项
+        const string tmpVal = "MiniLaunch__selftest";
+        Check(!string.IsNullOrEmpty(Environment.ProcessPath) && File.Exists(Environment.ProcessPath),
+            "Environment.ProcessPath 指向真实可执行文件", Environment.ProcessPath ?? "null");
+        string asExe = Environment.ProcessPath ?? "";
+        bool w = File.Exists(asExe) && AutoStart.TryEnable(asExe, tmpVal);
+        bool rb = w && AutoStart.SameExe(AutoStart.ReadRawCommand(tmpVal) ?? "", asExe);
+        AutoStart.TryDisable(tmpVal);
+        bool cleaned = AutoStart.ReadRawCommand(tmpVal) == null;
+        Check(w, "自启注册表：写入 Run 项成功");
+        Check(rb, "自启注册表：写入后回读一致");
+        Check(cleaned, "自启注册表：删除后回读为空");
+
+        // 安装到本地：传入临时目录，避免在自检时污染 %LOCALAPPDATA%
+        string tmpDir = Path.Combine(Path.GetTempPath(), "MiniLaunch-inst-" + Guid.NewGuid().ToString("N")[..6]);
+        string tmpExe = Path.Combine(tmpDir, "fake.exe");
+        try
+        {
+            Directory.CreateDirectory(tmpDir);
+            File.WriteAllText(tmpExe, "fake-exe-content");
+            var (iok, imsg) = AutoStart.InstallLocal(tmpExe, tmpDir);
+            string installed = Path.Combine(tmpDir, "MiniLaunch.exe");
+            Check(iok && File.Exists(installed), "安装到本地：复制 exe 到目标目录", imsg);
+            bool same = false;
+            try { same = File.ReadAllText(installed) == "fake-exe-content"; } catch { }
+            Check(same, "安装到本地：内容一致");
+        }
+        catch { }
+        finally { try { Directory.Delete(tmpDir, true); } catch { } }
+        var (badOk, _) = AutoStart.InstallLocal("C:/nonexistent/x.exe", tmpDir);
+        Check(!badOk, "安装到本地：源文件不存在时拒绝安装");
+
         // ---- 1b. 默认热键 = Ctrl+Space，且可自定义（Format/Parse 往返）----
         var def = new AppConfig();
         Check(def.Hotkey == "Ctrl+Space", "默认热键为 Ctrl+Space", def.Hotkey);

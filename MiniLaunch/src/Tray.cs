@@ -94,8 +94,14 @@ public static class Tray
         Win32.AppendMenuW(menu, Win32.MF_STRING, 106, "设置热键…（" + Program.Cfg.Hotkey + "）");
         Win32.AppendMenuW(menu, Win32.MF_STRING, 101, "添加程序…");
         Win32.AppendMenuW(menu, Win32.MF_STRING, 102, "重新扫描");
-        Win32.AppendMenuW(menu, Win32.MF_STRING | (Program.Cfg.AutoStart ? Win32.MF_CHECKED : 0u), 103, "开机自启");
+        // 勾选状态以**注册表**为准（真相源），而不是 config.json：
+        // 否则注册表项被清理工具删掉后，菜单仍显示已勾选，用户却一直找不到原因。
+        Win32.AppendMenuW(menu, Win32.MF_STRING | (AutoStart.IsActive() ? Win32.MF_CHECKED : 0u), 103, "开机自启");
         Win32.AppendMenuW(menu, Win32.MF_STRING, 104, "打开配置文件");
+        Win32.AppendMenuW(menu, Win32.MF_SEPARATOR, UIntPtr.Zero, null);
+        Win32.AppendMenuW(menu, Win32.MF_STRING, 107, "开机自启诊断…");
+        Win32.AppendMenuW(menu, Win32.MF_STRING, 108, "安装到本地并设为开机自启");
+        Win32.AppendMenuW(menu, Win32.MF_STRING, 109, "注册登录自启任务（任务计划）");
         Win32.AppendMenuW(menu, Win32.MF_SEPARATOR, UIntPtr.Zero, null);
         Win32.AppendMenuW(menu, Win32.MF_STRING, 105, "退出");
 
@@ -115,6 +121,9 @@ public static class Tray
             case 102: Program.StartScan(true); break;
             case 103: Program.ToggleAutoStart(); break;
             case 104: Program.OpenConfig(); break;
+            case 107: Program.ShowAutoStartDiagnostics(); break;
+            case 108: Program.InstallLocalAndEnable(); break;
+            case 109: Program.RegisterLogonTask(); break;
             case 105: Win32.DestroyWindow(hwnd); break;
         }
     }

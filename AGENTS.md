@@ -83,8 +83,9 @@ MiniLaunch/src/
   Launcher.cs    ShellExecuteEx 封装（runas / 工作目录 / explorer /select）
   Theme.cs       配色表 + GDI 绘制工具（竖向渐变 / 圆角填充 / 按键帽 / 放大镜 / DWM 圆角）
   MainWindow.cs  无边框 WS_POPUP + 原生 EDIT 子类化 + 自绘双缓冲列表 + 拖放 + DPI + 右键菜单 + 失焦隐藏
+  AutoStart.cs   开机自启：HKCU Run 项读写（写入后回读校验）+ 启动自愈 + 安装到本地 + 任务计划
   HotkeyDialog.cs 热键录制小窗（按下即生效，Esc 取消）
-  Tray.cs        托盘菜单（设置热键 / 添加程序 / 重新扫描 / 开机自启 / 退出）
+  Tray.cs        托盘菜单（设置热键 / 添加程序 / 重新扫描 / 开机自启 / 开机自启诊断 / 安装到本地 / 注册登录自启任务 / 开机自启 / 退出）
   NativeOut.cs   管道 stdout 输出（WinExe 无控制台）
   SelfTest.cs    --selftest 全部断言
 方案.md / 详细计划.md / 审查记录.md   设计依据与已知问题处置（改架构前先读）
@@ -123,6 +124,10 @@ MiniLaunch/src/
 17. **高版本系统 API 必须降级**：`SetProcessDpiAwarenessContext`（Win10 1703+）、`GetDpiForWindow`（Win10 1607+）在老系统上直接 P/Invoke 会抛 `EntryPointNotFoundException` **直接崩**。统一走 `Dpi.EnableAwareness()`（降级到 `SetProcessDPIAware`）与 `Dpi.ForWindow()`（降级到 `GetDeviceCaps(LOGPIXELSX)`）；`DwmSetWindowAttribute`（Win8+）已在 `Theme.ApplyModernFrame` 的 try/catch 里。
 18. **子进程管道必须显式指定编码**：`Process.StandardOutput` 默认按「**父进程控制台代码页**」解码（本机 GBK），而 powershell 按 `[Console]::OutputEncoding=UTF8` 输出的是 UTF-8 → 中文乱码；更糟的是 GBK 双字节解码会把 JSON 里的 `"` 吞掉，抛 `JsonException: FoundInvalidCharacter`，**UWP 列表全丢且缓存永远写不出来**（于是每次启动都白跑一次 1.3s 的 powershell）。必须在 `ProcessStartInfo` 里设 `StandardOutputEncoding = Encoding.UTF8`（同理 `StandardErrorEncoding`）。读 stderr 要用 `ReadToEndAsync` 并行，否则管道写满会死锁。
 19. **扫描分两阶段**：开始菜单/注册表约 30ms，先发布让窗口有内容；UWP 需拉 powershell（首次 ~1.3s），等窗口首次显示（`Program.NotifyFirstShown`）后再做——开机自启常驻时完全不占启动资源。`uwp-cache.json` 里要有一条**空名哨兵**记录扫描时间戳，否则 0 条时会被当成“无缓存”而每次重跑 powershell。
+20. **开机自启必须“写入后回读校验”**：`Registry.SetValue` 被组策略/安全软件拦截时**不抛异常**，只是不生效——所以写入后必须回读比对，不一致就回滚 UI 状态并提示。菜单勾选状态一律以**注册表**为准（真相源），不是 config.json。
+21. **自启目标要用稳定路径**：`Environment.ProcessPath` 拿到的是“当前正在跑的那个 exe”，在 `bin\Debug` 下就是构建目录，下次 `git clean` 就失效了。托盘菜单「安装到本地并设为开机自启」会把程序复制到 `%LOCALAPPDATA%\MiniLaunch` 再指向它。
+22. **启动时要自愈**：注册表项指向的文件没了（构建目录被清理/搬走/换机）→ 每次启动检查并改写回当前 exe；用户关闭过自启 → 清理注册表残留。`AutoStart.Heal` 的第三个参数是「配置文件**存在**」，而 `firstRun` 是「配置文件**不存在**」，语义相反，传参必须取反。
+23. **自启常驻时窗口可能永远不显示**：`FirstShown` 只在 `MainWindow.ShowWin()` 里 set，所以 `DoScan` 里不能无限 `Wait()`——否则 UWP 扫描永远不执行，UWP 应用永远搜不到。现在改成「首显 或 3 秒超时」先到者触发。
 
 ## 运行环境兼容性
 

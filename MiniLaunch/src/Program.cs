@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Win32;
 
 namespace MiniLaunch;
@@ -16,6 +17,15 @@ public static class Program
     static MainWindow? _win;
     static int _scanning;
 
+    /// <summary>热键是否注册成功（诊断用）。</summary>
+    public static bool HotkeyOk { get; private set; }
+
+    /// <summary>UWP 扫描是否已完成（诊断用）。</summary>
+    public static bool UwpScanned { get; private set; }
+
+    /// <summary>启动瞬间的路径探针（诊断用）。</summary>
+    static string _startupDiag = "";
+
     /// <summary>窗口首次显示信号：UWP 扫描（需拉 powershell）拖到首次显示之后再做。</summary>
     static readonly ManualResetEventSlim FirstShown = new(false);
     static int _firstShown;
@@ -29,8 +39,15 @@ public static class Program
 
         Paths.EnsureDir();
         bool firstRun = !File.Exists(Paths.ConfigPath);
+        _startupDiag = $"firstRun={firstRun} | Dir={Paths.Dir} | ConfigPath={Paths.ConfigPath} | Exists={File.Exists(Paths.ConfigPath)} | APPDATA={Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)}";
         _cfg = ConfigStore.LoadConfig();
         _usage = ConfigStore.LoadUsage();
+
+        // 开机自启自愈：注册表是「真相源」，config.json 只是用户意图的备份。
+        // 历史问题「设了开机自启但重启后没启动」的根因就是：注册表项指向的文件
+        // 失效了（构建目录被清理/搬走），却没有任何人修正它。
+        // firstRun = 「配置文件不存在」，而 Heal 的第三个参数是「配置文件存在」——语义相反，必须取反
+        HealAutoStart(configExists: !firstRun);
         _search = new SearchEngine(_usage);
         _icons = new IconCache();
 
@@ -66,6 +83,7 @@ public static class Program
 
         var (mods, vk, ok) = HotkeyParser.Parse(_cfg.Hotkey);
         bool hkOk = ok && Win32.RegisterHotKey(_win.Hwnd, 1, mods | Win32.MOD_NOREPEAT, vk);
+        HotkeyOk = hkOk;
         if (!hkOk)
             Tray.Notify("热键注册失败", $"“{_cfg.Hotkey}”可能被其他程序占用，右键托盘图标可重新设置。");
 
@@ -164,11 +182,13 @@ public static class Program
         var reg = Scanners.ScanRegistry();
         PublishEntries(custom, sm, reg, new List<Entry>());
 
-        // 第二阶段（慢，首次要 1.3s 拉 powershell）：等窗口首次显示后再做。
-        // 开机自启常驻时这样完全不占启动资源；首次启动时也不会和首屏抢 CPU/磁盘。
-        try { FirstShown.Wait(); } catch { }
+        // 第二阶段（慢，首次要 1.3s 拉 powershell）：等「窗口首次显示」或 3 秒超时（先到者触发）。
+        // 开机自启常驻时窗口可能永远不显示——此前用 FirstShown.Wait() 无限阻塞，
+        // 结果是 UWP 应用永远扫不到、永远搜不出来。现在最多等 3 秒就照常扫。
+        try { FirstShown.Wait(TimeSpan.FromSeconds(3)); } catch { }
         var uwp = Scanners.ScanUwp(false);
         PublishEntries(custom, sm, reg, uwp);
+        UwpScanned = true;
     }
 
     static void PublishEntries(List<Entry> custom, List<Entry> sm, List<Entry> reg, List<Entry> uwp)
@@ -243,24 +263,195 @@ public static class Program
         }
     }
 
+    /// <summary>
+    /// 开机自启开关。以**注册表**为真相源（而不是 config.json）：
+    ///   - 写注册表失败时必须回滚 UI 状态并提示，否则会出现「菜单已勾选、实际没写进去」；
+    ///   - 写入后回读校验，因为被策略/安全软件拦截时 SetValue 不会抛异常，只是不生效。
+    /// </summary>
     public static void ToggleAutoStart()
     {
-        _cfg.AutoStart = !_cfg.AutoStart;
+        bool currentlyOn = AutoStart.IsActive();
+
+        if (!currentlyOn)
+        {
+            // —— 开启 ——
+            string? exe = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(exe) || !File.Exists(exe))
+            {
+                Tray.Notify("无法设置开机自启", "找不到当前程序文件路径。");
+                return;
+            }
+
+            // 当前跑的是构建目录里的临时产物？先安装到稳定位置再指向它
+            if (AutoStart.IsBuildOutput(exe))
+            {
+                var (ok, msg) = AutoStart.InstallLocal(exe);
+                if (!ok)
+                {
+                    Tray.Notify("无法设置开机自启", "复制到本地目录失败：" + msg);
+                    return;
+                }
+                exe = AutoStart.InstalledExe;
+            }
+
+            if (!AutoStart.TryEnable(exe))
+            {
+                // 写不进去：回滚状态 + 明确告知（不静默失败）
+                _cfg.AutoStart = false;
+                ConfigStore.SaveConfig(_cfg);
+                Tray.Notify("开机自启设置失败",
+                    "注册表写入被拒绝或被安全软件拦截。可改用菜单「安装到本地并设为开机自启」，或手动添加：\n" +
+                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run → MiniLaunch = \"" + exe + "\"");
+                return;
+            }
+
+            _cfg.AutoStart = true;
+            ConfigStore.SaveConfig(_cfg);
+            Tray.Notify("已设置开机自启", exe);
+            return;
+        }
+
+        // —— 关闭 ——
+        if (!AutoStart.TryDisable())
+        {
+            Tray.Notify("关闭开机自启失败",
+                "注册表项删除失败，可手动删除：HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run 下的 MiniLaunch。");
+            return;
+        }
+        _cfg.AutoStart = false;
+        ConfigStore.SaveConfig(_cfg);
+        Tray.Notify("已关闭开机自启", "");
+    }
+
+    /// <summary>开机自启自愈：让注册表项与用户意图、当前 exe 保持一致。</summary>
+    static void HealAutoStart(bool configExists)
+    {
         try
         {
-            using var k = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
-            if (_cfg.AutoStart)
+            var r = AutoStart.Heal(_cfg.AutoStart, Environment.ProcessPath, configExists);
+            switch (r)
             {
-                string? exe = Environment.ProcessPath;
-                if (!string.IsNullOrEmpty(exe)) k.SetValue("MiniLaunch", "\"" + exe + "\"");
+                case AutoStart.HealResult.Adopted:
+                case AutoStart.HealResult.Repaired:
+                    if (!_cfg.AutoStart) { _cfg.AutoStart = true; ConfigStore.SaveConfig(_cfg); }
+                    break;
+                case AutoStart.HealResult.Disabled:
+                    if (_cfg.AutoStart) { _cfg.AutoStart = false; ConfigStore.SaveConfig(_cfg); }
+                    break;
             }
-            else
+            // 把自愈过程落到报告文件：用户不用点菜单就能看到「为什么没自启」
+            try
             {
-                k.DeleteValue("MiniLaunch", throwOnMissingValue: false);
+                string path = Path.Combine(Paths.Dir, "autostart-report.txt");
+                File.WriteAllText(path, BuildAutoStartReport());
             }
+            catch { }
         }
         catch { }
+    }
+
+    /// <summary>托盘菜单「安装到本地并设为开机自启」：复制到 %LOCALAPPDATA%\MiniLaunch 后指向它。</summary>
+    public static void InstallLocalAndEnable()
+    {
+        string? exe = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(exe))
+        {
+            Tray.Notify("安装失败", "找不到当前程序文件路径。");
+            return;
+        }
+        var (ok, msg) = AutoStart.InstallLocal(exe);
+        if (!ok)
+        {
+            Tray.Notify("安装到本地失败", msg);
+            return;
+        }
+        if (!AutoStart.TryEnable(AutoStart.InstalledExe))
+        {
+            Tray.Notify("开机自启设置失败", "程序已复制到本地，但注册表写入失败。");
+            return;
+        }
+        _cfg.AutoStart = true;
         ConfigStore.SaveConfig(_cfg);
+        Tray.Notify("已安装到本地并设为开机自启",
+            AutoStart.InstalledExe + "\n本次运行仍是原位置，下次重启后由本地副本启动。");
+    }
+
+    /// <summary>开机自启诊断报告（写入 %APPDATA%\MiniLaunch\autostart-report.txt）。</summary>
+    static string BuildAutoStartReport()
+    {
+        string? raw = AutoStart.ReadRawCommand();
+        string? target = AutoStart.ReadTargetExe();
+        bool fileOk = target != null && File.Exists(target);
+        string? cur = Environment.ProcessPath;
+        bool curBuild = cur != null && AutoStart.IsBuildOutput(cur);
+
+        var sb = new StringBuilder();
+        sb.AppendLine("【MiniLaunch 开机自启诊断】  " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        sb.AppendLine();
+        sb.AppendLine("注册表项  HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+        sb.AppendLine("  值       : " + (string.IsNullOrEmpty(raw) ? "(未设置)" : raw));
+        sb.AppendLine("  目标文件 : " + (target ?? "(无)"));
+        sb.AppendLine("  文件存在 : " + (fileOk ? "是" : "否   ★ 这就是开机没有自启的直接原因"));
+        sb.AppendLine();
+        sb.AppendLine("当前运行  " + (cur ?? "(未知)"));
+        sb.AppendLine("  路径类型: " + (curBuild ? "构建目录（临时）★ 不适合做自启目标" : "稳定路径"));
+        sb.AppendLine();
+        sb.AppendLine("配置目录  " + Paths.Dir);
+        sb.AppendLine("  config   : " + Paths.ConfigPath + "  存在=" + File.Exists(Paths.ConfigPath));
+        sb.AppendLine("  APPDATA  : " + Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
+        sb.AppendLine("  路径自检 : " + _startupDiag);
+        sb.AppendLine();
+        sb.AppendLine("热键      " + _cfg.Hotkey + " → " + (HotkeyOk ? "已注册" : "★ 注册失败（可能被输入法占用）"));
+        sb.AppendLine("UWP 扫描  " + (UwpScanned ? "已完成" : "尚未完成"));
+        sb.AppendLine("任务计划  " + (AutoStart.IsTaskRegistered() ? "已注册" : "未注册"));
+        sb.AppendLine("稳定安装目录 " + AutoStart.InstallDir);
+        sb.AppendLine();
+        sb.AppendLine("--- 本次启动的自愈过程 ---");
+        sb.AppendLine(AutoStart.LastHealDetail);
+        sb.AppendLine();
+        sb.AppendLine("建议：托盘菜单「安装到本地并设为开机自启」，把程序复制到 %LOCALAPPDATA%\\MiniLaunch 后再启用自启。");
+        return sb.ToString();
+    }
+
+    /// <summary>托盘菜单「开机自启诊断…」：把注册表/文件/热键/UWP 扫描状态一次说清。</summary>
+    public static void ShowAutoStartDiagnostics()
+    {
+        string report = BuildAutoStartReport();
+        string reportPath = Path.Combine(Paths.Dir, "autostart-report.txt");
+        try { File.WriteAllText(reportPath, report); } catch { }
+
+        string brief =
+            "注册表项：" + (string.IsNullOrEmpty(AutoStart.ReadRawCommand()) ? "(未设置)" : "已设置") + "\n" +
+            "目标文件存在：" + (AutoStart.IsActive() ? "是" : "否  ← 没自启的原因") + "\n" +
+            "当前路径：" + (Environment.ProcessPath != null && AutoStart.IsBuildOutput(Environment.ProcessPath) ? "构建目录（临时，不稳定）" : "稳定") + "\n" +
+            "热键：" + (HotkeyOk ? "正常" : "注册失败") + "\n" +
+            "UWP 扫描：" + (UwpScanned ? "已完成" : "未完成") + "\n\n" +
+            "完整报告：" + reportPath;
+
+        try
+        {
+            Win32.MessageBoxW(_win?.Hwnd ?? IntPtr.Zero, brief, "开机自启诊断",
+                Win32.MB_OK | Win32.MB_ICONINFORMATION);
+        }
+        catch { }
+    }
+
+    /// <summary>注册「登录即启动」的任务计划（不需要管理员）。用于 Run 项被安全软件拦截时的替代方案。</summary>
+    public static void RegisterLogonTask()
+    {
+        string exe = AutoStart.InstalledExe;
+        if (!File.Exists(exe))
+        {
+            var cur = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(cur) || !File.Exists(cur)) { Tray.Notify("注册失败", "找不到可用的程序路径。"); return; }
+            var (ok, msg) = AutoStart.InstallLocal(cur);
+            if (!ok) { Tray.Notify("注册失败", msg); return; }
+            exe = AutoStart.InstalledExe;
+        }
+        if (AutoStart.RegisterLogonTask(exe))
+            Tray.Notify("已注册登录自启任务", exe);
+        else
+            Tray.Notify("注册任务计划失败", "schtasks 执行失败，可能被策略限制。");
     }
 
     // ================= 热键设置 =================
