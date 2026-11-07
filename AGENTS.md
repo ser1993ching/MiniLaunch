@@ -164,7 +164,9 @@ _footerY/_footerH   底部快捷键栏（38）
   每次 `git commit` 触发 `post-commit` → 逐个检查 **github.com / gitee.com** 的远端，
   先判断平台上**是否已创建对应仓库**（GitHub 走 `api.github.com`，Gitee 走 `gitee.com/api/v5`），
   存在才推，不存在则跳过（不报错）；名为 `upstream` 的远端不自动推（那是别人的仓库）。
-  推送到其它平台需手动 `git push <remote> master`。
+  两个远端均使用 **SSH**（免密，不依赖凭据管理器）：
+  `origin = git@github.com:ser1993ching/MiniLaunch.git`，
+  `gitee = git@gitee.com:yangwei01/mini-launch.git`。
   单次关闭：`ML_NO_AUTOPUSH=1 git commit ...`；单仓库关闭：`git config autoPush.enabled false`；
   演练不真推：`ML_AUTOPUSH_DRYRUN=1 git commit ...`。
 - 注释与 UI 文案用中文，风格与现有文件一致（`file-scoped namespace`、`static` 工具类、紧凑写法）。
