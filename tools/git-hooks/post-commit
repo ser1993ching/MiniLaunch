@@ -8,11 +8,15 @@
 #         - 不存在        → 跳过（不报错，不做任何推送）
 #         - 存在且可访问  → 自动 push
 #    3. 已在远端且没有新提交 → 跳过
+#    4. 本地与远端真分叉     → 不自动推送，只提示手动处理命令
+#    5. 刚 amend 了最后一次提交 → 用 --force-with-lease 安全强推
 #
 #  关闭方式（任选其一）：
 #    - 单次：  ML_NO_AUTOPUSH=1 git commit ...
 #    - 单仓库：git config autoPush.enabled false
 #    - 单仓库：在 .git/ 下放一个 ML_NO_AUTOPUSH 空文件
+#
+#  调试：  ML_AUTOPUSH_DRYRUN=1 git commit ...   # 只演练不真推
 #
 #  安装：bash tools/install-autopush-hook.sh
 # =============================================================================
@@ -31,7 +35,7 @@ case "$gitdir" in /*) ;; *) gitdir="$repo_root/$gitdir" ;; esac
 [ "$(git config --get autoPush.enabled 2>/dev/null)" = "false" ] && exit 0
 
 # ------------------------------------------------- 1. 仓库自带的 post-commit
-# 设置了全局 core.hooksPath 之后，仓库 .git/hooks 下的同名钩子不会再被触发，
+# 设置全局 core.hooksPath 之后，仓库 .git/hooks 下的同名钩子不会再被触发，
 # 这里手动转交，保证各仓库原有的钩子照常执行。
 if [ -x "$gitdir/hooks/post-commit" ]; then
   "$gitdir/hooks/post-commit" || true
@@ -58,17 +62,19 @@ fi
 # --------------------------------------------------- 4. 解析 owner/repo 名
 slug=""
 case "$url" in
-  git@github.com:*)      slug=${url#git@github.com:};     slug=${slug%.git} ;;
+  git@github.com:*)      slug=${url#git@github.com:};      slug=${slug%.git} ;;
   ssh://git@github.com/*) slug=${url#ssh://git@github.com/}; slug=${slug%.git} ;;
-  https://github.com/*)   slug=${url#https://github.com/};  slug=${slug%.git} ;;
-  http://github.com/*)    slug=${url#http://github.com/};   slug=${slug%.git} ;;
+  https://github.com/*)   slug=${url#https://github.com/};   slug=${slug%.git} ;;
+  http://github.com/*)    slug=${url#http://github.com/};    slug=${slug%.git} ;;
 esac
 slug=${slug%/}
 
 # ----------------------------------------- 5. 判断 GitHub 上仓库是否已存在
 # 优先用 ls-remote 探测（走 SSH 凭据，私有仓库同样有效）：
-#   - 远端可达且返回 0 → 仓库存在（哪怕是刚建的空仓库）
-#   - 远端不可达      → 再用公开 API 二次确认，404 基本可断定"还没创建"
+#   - 远端可达       → 仓库存在（哪怕是刚建的空仓库）
+#   - 远端不可达     → 再用公开 API 二次确认
+#                     404 说明公开接口也找不到（多半是「还没创建」；
+#                     也可能是私有仓库且未授权，两种情况都不推送）
 if ! git ls-remote "$remote" >/dev/null 2>&1; then
   code=""
   if command -v curl >/dev/null 2>&1 && [ -n "$slug" ]; then
@@ -76,17 +82,30 @@ if ! git ls-remote "$remote" >/dev/null 2>&1; then
            "https://api.github.com/repos/$slug" 2>/dev/null || echo 000)
   fi
   if [ "$code" = "404" ]; then
-    say "跳过：GitHub 上还没有创建仓库 $slug（本次不推送）"
+    say "跳过：GitHub 上找不到仓库 $slug（尚未创建，或是私有仓库且未授权）——本次不推送"
   else
-    say "跳过：$remote 不可访问，仓库可能未创建或无权限（本次不推送）"
+    say "跳过：$remote 不可访问（仓库可能未创建或无权限）——本次不推送"
   fi
   exit 0
 fi
 
-# ------------------------------------------------------------ 6. 推送到远端
+# --------------------------------------------------------- 6. 推送结果处理
 dry=""
 [ "${ML_AUTOPUSH_DRYRUN:-0}" = "1" ] && dry="--dry-run"
 
+report_fail() {
+  say "推送失败：$remote $branch"
+  case "$1" in
+    *"non-fast-forward"*|*"fetch first"*|*"rejected"*|*"behind"*)
+      say "    远端存在本地没有的提交（历史不相关或已分叉）。可选处理："
+      say "      git pull --rebase $remote $branch            # 合并远端提交"
+      say "      git push --force-with-lease $remote $branch  # 覆盖远端（谨慎）"
+      ;;
+  esac
+  printf '%s\n' "$1" | sed 's/^/    /' >&2
+}
+
+# ------------------------------------------------------------ 7. 推送到远端
 if git rev-parse --verify --quiet '@{u}' >/dev/null 2>&1; then
   upstream=$(git rev-parse '@{u}')
   ahead=$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)
@@ -98,9 +117,9 @@ if git rev-parse --verify --quiet '@{u}' >/dev/null 2>&1; then
   fi
 
   if [ "$behind" != "0" ]; then
-    # 本地与远端已分叉：只有一种情况可以安全处理——刚 amend 了最后一次提交。
+    # 本地与远端已分叉。只有一种情况可以安全处理——刚 amend 了最后一次提交：
     # amend 后的新提交与远端旧提交是「兄弟节点」（共享同一个父提交），
-    # 即 HEAD^ == @{u}^；这种情况用 --force-with-lease 强推最安全，
+    # 即 HEAD^ == @{u}^。此时用 --force-with-lease 强推最安全，
     # 若远端在此期间被别人动过，lease 会拒绝，不会覆盖他人提交。
     is_amend=no
     head_parent=$(git rev-parse --verify --quiet 'HEAD^' 2>/dev/null || echo "")
@@ -111,8 +130,7 @@ if git rev-parse --verify --quiet '@{u}' >/dev/null 2>&1; then
 
     if [ "$is_amend" = "yes" ]; then
       if ! out=$(git push $dry --force-with-lease "$remote" "HEAD:refs/heads/$branch" 2>&1); then
-        say "推送失败：$remote $branch"
-        printf '%s\n' "$out" | sed 's/^/    /' >&2
+        report_fail "$out"
         exit 0
       fi
       if [ -n "$dry" ]; then
@@ -122,20 +140,20 @@ if git rev-parse --verify --quiet '@{u}' >/dev/null 2>&1; then
       fi
       exit 0
     fi
+
     say "跳过：本地与远端已分叉（远端多出 $behind 个提交），未自动推送"
     say "    请手动处理：git pull --rebase $remote $branch   或   git push --force-with-lease $remote $branch"
     exit 0
   fi
 
   if ! out=$(git push $dry "$remote" "HEAD:refs/heads/$branch" 2>&1); then
-    say "推送失败：$remote $branch"
-    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    report_fail "$out"
     exit 0
   fi
 else
+  # 没有上游：首次推送
   if ! out=$(git push $dry --set-upstream "$remote" "HEAD:refs/heads/$branch" 2>&1); then
-    say "推送失败：$remote $branch"
-    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    report_fail "$out"
     exit 0
   fi
 fi
