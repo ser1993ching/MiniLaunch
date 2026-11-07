@@ -12,7 +12,7 @@
 纯 Win32 原生自绘 UI · 零 NuGet 依赖 · 零反射 · **空闲 CPU 占用 0%**
 Native Win32 self-drawn UI · Zero NuGet packages · Zero reflection · **0% CPU while idle**
 
-[低内存](#-低内存--low-memory-footprint) · [功能特性](#-功能特性--features) · [界面截图](#-界面截图--screenshots) · [快速开始](#-快速开始--getting-started) · [技术细节](#-技术细节--technical-notes) · [English](#english-readme)
+[低内存](#-低内存--低资源占用--low-memory--low-resource-footprint) · [功能特性](#-功能特性--features) · [界面截图](#-界面截图--screenshots) · [快速开始](#-快速开始--getting-started) · [技术细节](#-技术细节--technical-notes) · [English](#english-readme)
 
 ---
 
