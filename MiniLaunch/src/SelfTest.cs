@@ -21,10 +21,12 @@ public static class SelfTest
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         string origDir = Paths.Dir;
+        string tmpDir = "";
         try
         {
             // 用临时目录隔离，避免污染真实配置
-            Paths.Dir = Path.Combine(Path.GetTempPath(), "MiniLaunch-selftest-" + Guid.NewGuid().ToString("N")[..8]);
+            tmpDir = Path.Combine(Path.GetTempPath(), "MiniLaunch-selftest-" + Guid.NewGuid().ToString("N")[..8]);
+            Paths.Dir = tmpDir;
             RunAll();
         }
         catch (Exception ex)
@@ -37,6 +39,9 @@ public static class SelfTest
         finally
         {
             Paths.Dir = origDir;
+            // 清理临时目录（否则每次自检都会在 %TEMP% 留下一个垃圾目录）
+            try { if (tmpDir.Length > 0 && Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true); }
+            catch { }
         }
 
         sw.Stop();
