@@ -145,6 +145,14 @@ public sealed class MainWindow
         }
     }
 
+    /// <summary>搜索框当前选区是否为空（EM_GETSEL 低 16 位=起点、高 16 位=终点）。</summary>
+    bool SelectionCollapsed()
+    {
+        long packed = (long)Win32.SendMessageW(_edit, Win32.EM_GETSEL, IntPtr.Zero, IntPtr.Zero);
+        int start = (int)(packed & 0xFFFF), end = (int)((packed >> 16) & 0xFFFF);
+        return start == end;
+    }
+
     // ================= 查询 =================
     /// <summary>调试/预览用：直接设入搜索词（会触发 EN_CHANGE → Requery）。</summary>
     public void SetQuery(string text)
@@ -779,6 +787,10 @@ public sealed class MainWindow
     }
 
     // ================= EDIT 子类化 =================
+    /// <summary>启动器自己消费、且 EDIT 侧无任何语义的控制字符：一律吞掉，避免 EDIT 默认路径蜂鸣。</summary>
+    static bool IsSilentKeyChar(int ch) =>
+        ch == Win32.VK_ESCAPE || ch == 0x0D || ch == 0x0A || ch == 0x09;   // Esc / CR / LF / Tab
+
     static IntPtr EditProcStatic(IntPtr h, uint msg, IntPtr w, IntPtr l, IntPtr id, IntPtr data)
     {
         var self = s_this;
@@ -794,10 +806,19 @@ public sealed class MainWindow
                 case Win32.VK_ESCAPE: self.HideWin(); return IntPtr.Zero;
             }
         }
-        // Esc 的 WM_KEYDOWN 被上面吃掉后，TranslateMessage 仍会派生一条 WM_CHAR(27) 投给 EDIT；
-        // EDIT 对未处理的控制字符会走默认路径 MessageBeep —— 就是用户听到的那声「退出提示音」。
-        // 只拦 WM_KEYDOWN 不够，这条 WM_CHAR 必须一起吞掉（wParam 就是字符码 27）。
-        if (msg == Win32.WM_CHAR && (int)w == Win32.VK_ESCAPE) return IntPtr.Zero;
+        // 上面吞掉的这些按键，TranslateMessage 仍会各派生一条 WM_CHAR 投给 EDIT（wParam 就是字符码）：
+        // 27 = Esc、13/10 = Enter、9 = Tab。EDIT 对「它自己不用」的控制字符走默认路径 MessageBeep，
+        // 于是按 Esc/Enter/Tab 都会「叮」一声（系统「默认提示音」）。只拦 WM_KEYDOWN 不够，必须一起吞。
+        // 反向注意：0x01(^A)/0x03(^C)/0x16(^V)/0x18(^X)/0x1A(^Z)/0x08(退格) 是 EDIT 真正执行的编辑命令，
+        // 它们本身不响（^X 只有在「无内容可剪」时才响，说明命令已执行），吞了会破坏编辑功能。
+        if (msg == Win32.WM_CHAR)
+        {
+            int ch = (int)w;
+            if (IsSilentKeyChar(ch)) return IntPtr.Zero;
+            // Ctrl+X(0x18) 有选区时 EDIT 正常剪切且不响；没有选区可剪时才 MessageBeep 报「无效操作」。
+            // 所以只在选区为空时吞掉这条 WM_CHAR：既不破坏剪切，也消掉这一声。
+            if (ch == 0x18 && self.SelectionCollapsed()) return IntPtr.Zero;
+        }
         return Win32.DefSubclassProc(h, msg, w, l);
     }
 }

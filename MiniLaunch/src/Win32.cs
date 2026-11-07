@@ -189,6 +189,7 @@ internal static class Win32
     public const uint NIM_ADD = 0, NIM_MODIFY = 1, NIM_DELETE = 2;
     public const uint NIF_MESSAGE = 1, NIF_ICON = 2, NIF_TIP = 4, NIF_INFO = 0x10;
     public const uint NIIF_INFO = 1;
+    public const uint NIIF_NOSOUND = 0x10;   // 气泡通知不播「通知」系统音
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct OPENFILENAMEW
@@ -497,6 +498,7 @@ internal static class Win32
     public const int WM_KILLFOCUS = 0x0008;
     public const int CS_DROPSHADOW = 0x00020000;
     public const int EM_SETCUEBANNER = 0x1501;
+    public const int EM_GETSEL = 0x00B0;   // 返回值低 16 位=起点、高 16 位=终点（选区）
     public const int EM_SETMARGINS = 0xD3;
     public const int EM_SETSEL = 0xB1;
     public const int EC_LEFTMARGIN = 0x1, EC_RIGHTMARGIN = 0x2;

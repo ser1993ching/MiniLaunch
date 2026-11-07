@@ -442,8 +442,8 @@ public static class Program
 
         try
         {
-            Win32.MessageBoxW(_win?.Hwnd ?? IntPtr.Zero, brief, "开机自启诊断",
-                Win32.MB_OK | Win32.MB_ICONINFORMATION);
+            // 不用 MB_ICONINFORMATION：带图标类型就会播系统「信息」提示音，本程序要求零提示音
+            Win32.MessageBoxW(_win?.Hwnd ?? IntPtr.Zero, brief, "开机自启诊断", Win32.MB_OK);
         }
         catch { }
     }

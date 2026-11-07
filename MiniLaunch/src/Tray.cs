@@ -77,7 +77,7 @@ public static class Tray
         n.uFlags |= Win32.NIF_INFO;
         n.szInfo = text;
         n.szInfoTitle = title;
-        n.dwInfoFlags = Win32.NIIF_INFO;
+        n.dwInfoFlags = Win32.NIIF_INFO | Win32.NIIF_NOSOUND;   // 本项目零提示音：气泡不播系统「通知」音
         Win32.Shell_NotifyIconW(Win32.NIM_MODIFY, ref n);
     }
 

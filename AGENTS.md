@@ -131,7 +131,10 @@ MiniLaunch/src/
 24. **高 DPI 首显必须 resize 窗口**：窗口按 96 DPI 尺寸创建，`WM_CREATE` 里重算度量后必须 `SetWindowPos` 撑到新 `_w×_h`（主窗口与热键录制窗都要）——`WM_DPICHANGED` 只在 DPI *变化* 时触发，主屏缩放 ≠100% 时首显不会补，底部行/底栏会被裁剪。自检有「主窗口客户区与 DPI 布局一致」断言。
 25. **托盘必须响应 `TaskbarCreated`**：explorer 崩溃/重启后托盘图标全丢，不重建就永久消失。`RegisterWindowMessageW("TaskbarCreated")` 动态注册，主窗口收到后 `Tray.Readd()`。
 26. **空查询排序不能把 Count 拼进 Ticks**：`DateTime.Ticks≈6.4e17`，`Count*1e10` 的权重会被完全淹没，退化成「最近使用」排序。必须先比 Count 再比 LastTicks（拼一个 long 会溢出）。自检有「空查询频率优先于最近使用」回归断言。
-27. **Esc 会「响一声」：EDIT 的 `WM_CHAR(27)` 必须一起吞掉**：`TranslateMessage` 会把 Esc 的 `WM_KEYDOWN` 再派生一条 `WM_CHAR`（wParam=27）投给焦点窗口（搜索框 EDIT）。只拦 `WM_KEYDOWN` 时，这条 `WM_CHAR` 会透传给 `DefSubclassProc`，EDIT 对未处理的控制字符走默认路径 `MessageBeep` → 每次按 Esc 退出都「叮」一声（系统默认提示音，与 Windows 声音方案里的「默认提示音」是同一个事件）。修法：EDIT 子类化里 `msg==WM_CHAR && w==27` 直接 `return 0`。定位手段（可复用）：用 WASAPI `IAudioMeterInformation.GetPeakValue` 轮询默认渲染设备峰值，`keybd_event` 注入 Esc，修前峰值 0.66/51 采样、修后 0.0000。
+27. **按键会「响一声」：EDIT 的 `WM_CHAR` 控制字符必须一起吞掉**：`TranslateMessage` 会把 Esc/Enter/Tab 的 `WM_KEYDOWN` 再派生一条 `WM_CHAR`（wParam 就是字符码：27/13/9）投给焦点窗口（搜索框 EDIT）。只拦 `WM_KEYDOWN` 时这条 `WM_CHAR` 会透传给 `DefSubclassProc`，EDIT 对「它自己不用」的控制字符走默认路径 `MessageBeep` → 每按一次 Esc 退出 / Enter 启动 / Tab 都「叮」一声（系统「默认提示音」）。修法见 `MainWindow.IsSilentKeyChar`：27/13/10/9 直接 `return 0`。
+   **反向注意**：`0x01(^A)`、`0x03(^C)`、`0x16(^V)`、`0x18(^X)`、`0x1A(^Z)`、`0x08(退格)` 是 EDIT 真正执行的编辑命令，吞了会破坏编辑功能；其中 `^X` 只有**无选区可剪**时才响（属于 EDIT 报「无效操作」），所以按 `EM_GETSEL` 判断选区为空才吞。
+   **其他发声点**（一处不改就会漏）：托盘气泡 `Shell_NotifyIcon` 用 `NIIF_INFO` 会播系统「通知」音 → 加 `NIIF_NOSOUND`；`MessageBoxW` 带 `MB_ICON*` 会播对应系统音 → 诊断框只留 `MB_OK`。
+   定位手段（可复用）：WASAPI `IAudioMeterInformation.GetPeakValue` 轮询默认渲染设备峰值 + `keybd_event` 注入按键，量出修前 0.6604（51~65 采样）/ 修后 0.0000。注意本机 IME（`OimeTsfNotifyWindow`）会吃掉注入的字母键，验证「打字/剪切」类功能要用 `WM_SETTEXT`+`EM_SETSEL`+剪贴板核对，别依赖注入字母。
 
 ## 运行环境兼容性
 
