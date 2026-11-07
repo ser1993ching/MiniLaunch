@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Win32;
 
@@ -161,41 +162,54 @@ public static class Scanners
     // ============ UWP / 商店应用（powershell Get-StartApps，带磁盘缓存） ============
     public static List<Entry> ScanUwp(bool force)
     {
-        var cached = ReadUwpCache();
-        if (!force && cached.Count > 0)
-        {
-            long t = cached[0].CachedTicks;
-            if (DateTime.UtcNow.Ticks - t < TimeSpan.FromDays(7).Ticks)
-                return CacheToEntries(cached);
-        }
+        var (cachedItems, cachedTicks) = ReadUwpCache();
+        if (!force && cachedTicks > 0 &&
+            DateTime.UtcNow.Ticks - cachedTicks < TimeSpan.FromDays(7).Ticks)
+            return CacheToEntries(cachedItems);
+
         var apps = RunGetStartApps();
-        if (apps != null && apps.Count > 0)
+        if (apps == null) return CacheToEntries(cachedItems); // powershell 失败：沿用旧缓存
+
+        long now = DateTime.UtcNow.Ticks;
+        var items = new List<UwpCacheItem>();
+        foreach (var a in apps)
         {
-            long now = DateTime.UtcNow.Ticks;
-            var items = new List<UwpCacheItem>();
-            foreach (var a in apps)
-            {
-                if (string.IsNullOrEmpty(a.AppId) || !a.AppId.Contains('!')) continue; // 只留包化 AUMID
-                items.Add(new UwpCacheItem { Name = a.Name, AppId = a.AppId, CachedTicks = now });
-            }
-            try { ConfigStore.SaveAtomic(Paths.UwpCachePath, JsonSerializer.Serialize(items, JsonCtx.Default.ListUwpCacheItem)); } catch { }
-            return CacheToEntries(items);
+            if (string.IsNullOrEmpty(a.AppId) || !a.AppId.Contains('!')) continue; // 只留包化 AUMID
+            items.Add(new UwpCacheItem { Name = a.Name, AppId = a.AppId, CachedTicks = now });
         }
-        return CacheToEntries(cached);
+        // 写盘时追加一条空名哨兵：即使一个包化应用都没有，也记录“已扫描”的时间戳，
+        // 否则每次启动都会重复拉 powershell（缓存里没条目 → 判定为无缓存）。
+        var write = new List<UwpCacheItem>(items.Count + 1);
+        write.AddRange(items);
+        write.Add(new UwpCacheItem { Name = "", AppId = "", CachedTicks = now });
+        try { ConfigStore.SaveAtomic(Paths.UwpCachePath, JsonSerializer.Serialize(write, JsonCtx.Default.ListUwpCacheItem)); } catch { }
+        return CacheToEntries(items);
     }
 
-    static List<UwpCacheItem> ReadUwpCache()
+    /// <summary>读取 UWP 磁盘缓存：返回（有效条目，扫描时间戳）。</summary>
+    public static (List<UwpCacheItem> Items, long Ticks) ReadUwpCache()
     {
         try
         {
             if (File.Exists(Paths.UwpCachePath))
             {
                 var l = JsonSerializer.Deserialize(File.ReadAllText(Paths.UwpCachePath), JsonCtx.Default.ListUwpCacheItem);
-                if (l != null) return l;
+                if (l != null)
+                {
+                    long ticks = 0;
+                    var items = new List<UwpCacheItem>(l.Count);
+                    foreach (var it in l)
+                    {
+                        if (it.CachedTicks > ticks) ticks = it.CachedTicks;
+                        if (string.IsNullOrEmpty(it.Name) || string.IsNullOrEmpty(it.AppId)) continue; // 哨兵
+                        items.Add(it);
+                    }
+                    return (items, ticks);
+                }
             }
         }
         catch { }
-        return new List<UwpCacheItem>();
+        return (new List<UwpCacheItem>(), 0);
     }
 
     static List<Entry> CacheToEntries(List<UwpCacheItem> items)
@@ -212,6 +226,7 @@ public static class Scanners
 
     static List<StartAppItem>? RunGetStartApps()
     {
+        Process? p = null;
         try
         {
             var psi = new ProcessStartInfo("powershell.exe",
@@ -221,23 +236,81 @@ public static class Scanners
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true,
+                // 关键：默认会用「父进程控制台代码页」解码管道输出（本机 GBK），
+                // 而 powershell 按上面命令输出的是 UTF-8 → 中文乱码，且 GBK 双字节
+                // 解码会把 JSON 里的引号吞掉，直接导致 JsonException（UWP 列表全丢）。
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
             };
-            using var p = Process.Start(psi);
+            p = Process.Start(psi);
             if (p == null) return null;
+            try { p.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
+            // 先并行读 stderr：否则 stderr 管道写满会让子进程卡住（死锁）
+            var errTask = p.StandardError.ReadToEndAsync();
             string json = p.StandardOutput.ReadToEnd();
-            _ = p.StandardError.ReadToEnd();
             if (!p.WaitForExit(20_000)) { try { p.Kill(); } catch { } return null; }
-            json = json.Trim();
-            if (json.Length == 0) return null;
-            if (json.StartsWith('['))
-                return JsonSerializer.Deserialize(json, JsonCtx.Default.ListStartAppItem);
-            var one = JsonSerializer.Deserialize(json, JsonCtx.Default.StartAppItem);
-            return one == null ? null : new List<StartAppItem> { one };
+            try { errTask.Wait(1000); } catch { }
+            return ParseStartAppsJson(json);
         }
         catch
         {
             return null;
         }
+        finally
+        {
+            p?.Dispose();
+        }
+    }
+
+    /// <summary>解析 Get-StartApps 的 JSON 文本：容忍 BOM、控制字符与孤立代理项。</summary>
+    public static List<StartAppItem>? ParseStartAppsJson(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        json = json.Trim().TrimStart('\uFEFF');
+        if (json.Length == 0) return null;
+        try
+        {
+            return ParseStartAppsJsonCore(json);
+        }
+        catch (Exception)
+        {
+            // 个别应用名带控制字符/孤立代理项 → 清洗后重试一次
+            // （含 JsonException 与 System.Text.Json 转码孤立代理项时的 ArgumentException）
+            try { return ParseStartAppsJsonCore(SanitizeJson(json)); }
+            catch { return null; }
+        }
+    }
+
+    static List<StartAppItem>? ParseStartAppsJsonCore(string json)
+    {
+        if (json.StartsWith('['))
+            return JsonSerializer.Deserialize(json, JsonCtx.Default.ListStartAppItem);
+        var one = JsonSerializer.Deserialize(json, JsonCtx.Default.StartAppItem);
+        return one == null ? null : new List<StartAppItem> { one };
+    }
+
+    /// <summary>剔除 JSON 非法字符（控制字符、孤立代理项）。</summary>
+    static string SanitizeJson(string json)
+    {
+        var sb = new StringBuilder(json.Length);
+        for (int i = 0; i < json.Length; i++)
+        {
+            char c = json[i];
+            if (c < 0x20)
+            {
+                if (c == '\n' || c == '\r' || c == '\t') sb.Append(c);
+                continue;
+            }
+            if (char.IsHighSurrogate(c))
+            {
+                if (i + 1 < json.Length && char.IsLowSurrogate(json[i + 1])) { sb.Append(c).Append(json[i + 1]); i++; }
+                else sb.Append('\uFFFD');
+                continue;
+            }
+            if (char.IsLowSurrogate(c)) { sb.Append('\uFFFD'); continue; }
+            sb.Append(c);
+        }
+        return sb.ToString();
     }
 
     // ============ 条目构建 ============

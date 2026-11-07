@@ -16,6 +16,10 @@ public static class Program
     static MainWindow? _win;
     static int _scanning;
 
+    /// <summary>窗口首次显示信号：UWP 扫描（需拉 powershell）拖到首次显示之后再做。</summary>
+    static readonly ManualResetEventSlim FirstShown = new(false);
+    static int _firstShown;
+
     public static AppConfig Cfg => _cfg;
 
     public static int Main(string[] args)
@@ -50,6 +54,13 @@ public static class Program
         signalThread.Start();
 
         _win = MainWindow.Create(_cfg, _search, _icons, OnLaunch, () => StartScan(true), AddFiles);
+
+        // 图标后台提取完成 → 通知 UI 线程重绘（不在 WM_PAINT 里同步取图标）
+        _icons.OnIconReady = () =>
+        {
+            var w = _win;
+            if (w != null) Win32.PostMessageW(w.Hwnd, Win32.WM_APP_ICON_READY, IntPtr.Zero, IntPtr.Zero);
+        };
 
         Tray.Init(_win.Hwnd);
 
@@ -147,14 +158,32 @@ public static class Program
 
     static void DoScan()
     {
+        // 第一阶段（快，约 30ms）：自定义 + 开始菜单 + 注册表 → 先发布，窗口不必等 UWP
         var custom = Scanners.ScanCustom(_cfg);
         var sm = Scanners.ScanStartMenu();
         var reg = Scanners.ScanRegistry();
+        PublishEntries(custom, sm, reg, new List<Entry>());
+
+        // 第二阶段（慢，首次要 1.3s 拉 powershell）：等窗口首次显示后再做。
+        // 开机自启常驻时这样完全不占启动资源；首次启动时也不会和首屏抢 CPU/磁盘。
+        try { FirstShown.Wait(); } catch { }
         var uwp = Scanners.ScanUwp(false);
+        PublishEntries(custom, sm, reg, uwp);
+    }
+
+    static void PublishEntries(List<Entry> custom, List<Entry> sm, List<Entry> reg, List<Entry> uwp)
+    {
         var merged = EntryMerger.Merge(custom, sm, reg, uwp);
         _search.SetEntries(merged);
         if (_win != null)
             Win32.PostMessageW(_win.Hwnd, Win32.WM_APP_SCAN_DONE, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    /// <summary>窗口首次显示（幂等）：用于触发 UWP 扫描等延后任务。</summary>
+    public static void NotifyFirstShown()
+    {
+        if (Interlocked.Exchange(ref _firstShown, 1) == 0)
+            FirstShown.Set();
     }
 
     public static void AddFiles(string[] files)

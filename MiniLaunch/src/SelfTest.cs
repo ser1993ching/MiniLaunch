@@ -125,6 +125,30 @@ public static class SelfTest
         catch (Exception ex) { Check(false, "UWP 扫描无异常", ex.Message); }
         Check(uwpCount >= 0, "UWP 扫描执行", $"count={uwpCount}");
 
+        // ---- 6b. UWP JSON 解析容错（BOM / 控制字符 / 孤立代理项）----
+        string j1 = "\uFEFF[{\"Name\":\"A\u0001B\",\"AppID\":\"X_1!App\"}]";
+        var parsed1 = Scanners.ParseStartAppsJson(j1);
+        Check(parsed1 != null && parsed1.Count == 1 && parsed1[0].AppId == "X_1!App",
+            "UWP JSON 解析容错（BOM + 控制字符）", parsed1 == null ? "null" : $"count={parsed1.Count}");
+        string j2 = "[{\"Name\":\"C\uD800D\",\"AppID\":\"Y_1!App\"}]";
+        var parsed2 = Scanners.ParseStartAppsJson(j2);
+        Check(parsed2 != null && parsed2.Count == 1 && parsed2[0].AppId == "Y_1!App",
+            "UWP JSON 解析容错（孤立代理项）", parsed2 == null ? "null" : $"count={parsed2.Count}");
+
+        // ---- 6c. UWP 缓存能落盘并被复用（修复前因管道编码错误永远写不出缓存）----
+        var (cacheItems, cacheTicks) = Scanners.ReadUwpCache();
+        Check(cacheTicks > 0, "UWP 缓存已落盘（含扫描时间戳）", $"ticks={cacheTicks} items={cacheItems.Count}");
+        if (cacheTicks > 0)
+        {
+            var cachedEntries = Scanners.ScanUwp(false); // 应直接走磁盘缓存，不再拉 powershell
+            Check(cachedEntries.Count == cacheItems.Count, "UWP 缓存复用（不再重复拉 powershell）",
+                $"entries={cachedEntries.Count} cache={cacheItems.Count}");
+        }
+        else
+        {
+            Check(true, "UWP 缓存复用（本机无法运行 powershell，跳过校验）");
+        }
+
         // ---- 7. 合并去重 ----
         var e1 = Scanners.Make("Chrome", @"C:\x\chrome.exe", "", EntrySource.StartMenu, @"C:\x\chrome.exe");
         var e2 = Scanners.Make("chrome", @"C:\y\chrome2.exe", "", EntrySource.Registry, @"C:\y\chrome2.exe");
@@ -164,6 +188,26 @@ public static class SelfTest
             Check(h != IntPtr.Zero, "图标提取 notepad.exe");
             IntPtr h2 = icons.Get(ne);
             Check(h2 == h, "图标 LRU 缓存命中");
+        }
+
+        // ---- 9b. 图标后台提取（UI 线程不再同步取图标，避免首屏卡顿）----
+        using (var icons = new IconCache())
+        {
+            string notepad = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "notepad.exe");
+            var ne = Scanners.Make("记事本", "notepad.exe", "", EntrySource.Custom, notepad);
+            Check(!icons.TryGet(ne, out _), "图标缓存初始为空");
+            icons.Request(ne);
+            bool got = false;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < 5000)
+            {
+                icons.Pump();
+                if (icons.TryGet(ne, out var hi) && hi != IntPtr.Zero) { got = true; break; }
+                Thread.Sleep(10);
+            }
+            Check(got, "图标后台提取后可被 UI 取用");
+            icons.Request(ne); // 已在缓存：不应重复排队
+            Check(icons.TryGet(ne, out var h3) && h3 != IntPtr.Zero, "图标缓存命中后不再重复提取");
         }
 
         // ---- 10. 扫描结果完整性 ----

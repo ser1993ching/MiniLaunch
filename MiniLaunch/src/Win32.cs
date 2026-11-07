@@ -36,6 +36,7 @@ internal static class Win32
     public const int WM_APP_SHOW = WM_APP + 1;
     public const int WM_APP_TRAY = WM_APP + 2;
     public const int WM_APP_SCAN_DONE = WM_APP + 3;
+    public const int WM_APP_ICON_READY = WM_APP + 4;
 
     public const int EN_CHANGE = 0x0300;
 

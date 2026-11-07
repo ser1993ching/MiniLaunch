@@ -90,6 +90,7 @@ public sealed class MainWindow
 
     public void ShowWin()
     {
+        Program.NotifyFirstShown();
         Win32.GetCursorPos(out var pt);
         IntPtr mon = Win32.MonitorFromPoint(pt, Win32.MONITOR_DEFAULTTONEAREST);
         var mi = new Win32.MONITORINFO { cbSize = Marshal.SizeOf<Win32.MONITORINFO>() };
@@ -303,6 +304,11 @@ public sealed class MainWindow
 
             case Win32.WM_APP_SCAN_DONE:
                 if (Win32.IsWindowVisible(h)) Requery();
+                return IntPtr.Zero;
+
+            case Win32.WM_APP_ICON_READY:
+                // 后台提取完图标：并入 LRU 后重绘（图标不再在 UI 线程同步提取）
+                if (_icons.Pump()) Win32.InvalidateRect(h, IntPtr.Zero, false);
                 return IntPtr.Zero;
 
             case Win32.WM_APP_TRAY:
@@ -620,12 +626,18 @@ public sealed class MainWindow
             else if (hovered)
                 Theme.FillRoundSolid(hdc, row, _radius, _brushHover);
 
-            // 图标
-            IntPtr hIcon = _icons.Get(e);
+            // 图标：命中缓存直接画；未命中则排到后台线程提取（避免 WM_PAINT 里同步取图标卡住 UI）
             int iconX = row.L + Scale(12);
             int iconY = y + (_rowH - _icon) / 2;
-            if (hIcon != IntPtr.Zero)
-                Win32.DrawIconEx(hdc, iconX, iconY, hIcon, _icon, _icon, 0, IntPtr.Zero, Win32.DI_NORMAL);
+            if (_icons.TryGet(e, out IntPtr hIcon))
+            {
+                if (hIcon != IntPtr.Zero)
+                    Win32.DrawIconEx(hdc, iconX, iconY, hIcon, _icon, _icon, 0, IntPtr.Zero, Win32.DI_NORMAL);
+            }
+            else
+            {
+                _icons.Request(e);
+            }
 
             int textX = iconX + _icon + Scale(12);
             int textR = row.R - Scale(10);

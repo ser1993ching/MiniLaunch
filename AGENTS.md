@@ -22,9 +22,15 @@ MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --selftest
 # 报告：会产生 selftest-report.txt（结论同时写 stdout 管道）
 
 # 发布单文件（自包含 + 裁剪，12MB 左右；不要开 R2R，见下方「应用图标」）
+# 注意：-o 必须给「纯 ASCII 绝对路径」。本仓库目录名含中文（启动器），
+# 经 bash 包装器执行时相对路径解析会把中文段吃掉，产物会落到 E:\code\publish\...（错位）。
+# 正确做法：先发布到 ASCII 临时目录，再拷贝回 publish/win-x64
 dotnet publish -c Release -r win-x64 --self-contained \
   -p:PublishSingleFile=true -p:PublishTrimmed=true \
-  -o ../../publish/win-x64
+  -o "E:\code\_tmp_publish"
+cp /e/code/_tmp_publish/MiniLaunch.exe /e/code/_tmp_publish/MiniLaunch.pdb \
+   "/e/code/启动器/publish/win-x64/"
+# 发布后必须核对：./MiniLaunch.exe --selftest 应显示 45 项通过（拿到旧产物会显示 38）
 ```
 
 开发辅助（仅调试用，发布不包含）：
@@ -64,14 +70,14 @@ NativeAOT（`publish-aot.cmd`）**尚未创建**，需先装 VC 工具链。
 
 ```
 MiniLaunch/src/
-  Program.cs     入口：--selftest 分发、单实例 Mutex + 命名 Event、热键、托盘、消息循环、后台扫描
+  Program.cs     入口：--selftest 分发、单实例 Mutex + 命名 Event、热键、托盘、消息循环、后台扫描（分两阶段，见「易踩的坑」第 18/19 条）
   Win32.cs       全部 P/Invoke / 结构体 / 常量（新增 API 只加在这里）
   Config.cs      AppConfig / CustomEntry / UsageDb / JsonCtx 源生成 / Paths / ConfigStore 原子写 / HotkeyParser
   Entry.cs       Entry 模型 + EntryMerger（优先级：Custom > StartMenu > Registry > Uwp，按小写名去重）
-  Scanners.cs    StartMenuScanner（递归 .lnk/.url）/ RegistryScanner（3 个 Uninstall 键 + 噪声过滤）/ UwpScanner（powershell Get-StartApps → JSON，7 天缓存）
+  Scanners.cs    StartMenuScanner（递归 .lnk/.url）/ RegistryScanner（3 个 Uninstall 键 + 噪声过滤）/ UwpScanner（powershell Get-StartApps → JSON，7 天磁盘缓存）
   Pinyin.cs      常见中文软件别名表（wx→微信），不引全量拼音表
   Search.cs      分词 AND 匹配 + 打分（名前缀 100 > 名包含 80+位置 > 别名 60 > 路径 30；+log2(1+Count)*12；24h 内 +15）
-  IconCache.cs   HICON 提取（SHGetFileInfo / ExtractIconEx）+ LRU(64)，驱逐时 DestroyIcon
+  IconCache.cs   HICON 提取（SHGetFileInfo / ExtractIconEx）+ LRU(64)，驱逐时 DestroyIcon；提取走后台线程（UI 只读缓存，见「易踩的坑」第 19 条）
   AppIcon.cs     应用图标加载（exe 模块 RT_GROUP_ICON 32512 → LoadImageW）
   Dpi.cs         DPI 感知设置与 DPI 查询（老系统降级，见「易踩的坑」第 17 条）
   Launcher.cs    ShellExecuteEx 封装（runas / 工作目录 / explorer /select）
@@ -88,7 +94,7 @@ MiniLaunch/src/
 
 ## 运行时数据
 
-`%APPDATA%\MiniLaunch\`：`config.json`（热键/自启/自定义条目）、`usage.json`（使用次数与时间）、`uwp-cache.json`。
+`%APPDATA%\MiniLaunch\`：`config.json`（热键/自启/自定义条目）、`usage.json`（使用次数与时间）、`uwp-cache.json`（UWP 条目 + 一条空名“哨兵”记录扫描时间戳，0 条时也要写，否则每次启动都会重跑 powershell）。
 写入一律走 `ConfigStore.SaveAtomic`（写 `.tmp` 再替换）。改配置格式要兼容旧文件（缺字段用默认值，`LoadConfig` 已有 try-catch 兜底）。
 
 **默认热键 `Ctrl+Space`**（`HotkeyParser.DefaultHotkey`）。它常被中文输入法占用：
@@ -103,7 +109,7 @@ MiniLaunch/src/
 3. **IME**：EDIT 需子类化（comctl32 `SetWindowSubclass`），`VK_PROCESSKEY` 必须直通给输入法。
 4. **热键**：`RegisterHotKey` 失败要在托盘气泡提示并允许改 `config.json`；抢前台失败用 `AttachThreadInput` 兜底。
 5. **扫描线程**结束要 `PostMessage(WM_APP_SCAN_DONE)` 刷新列表，不能直接碰 UI。
-6. **图标提取不在 UI 线程同步做重活**：IconRef 指向网络盘时 WM_PAINT 会卡。
+6. **图标提取不在 UI 线程同步做重活**：IconRef 指向网络盘时 WM_PAINT 会卡。（现已在 `IconCache` 内部改为后台线程提取：绘制时 `TryGet` 只读缓存，未命中 `Request` 排队；后台取完回调 `WM_APP_ICON_READY` → UI 线程 `Pump()` 并入 LRU 再重绘。**HICON 的创建/销毁只在 UI 线程做**，避免绘制过程中图标被驱逐销毁。）
 7. **UWP**：`LaunchPath=explorer.exe` + `Args=shell:AppsFolder\<AUMID>`；powershell 输出前置 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`。
 8. **用量落盘**：每次启动成功立即写 + 进程退出 + `WM_QUERYENDSESSION`。
 9. **`WM_CTLCOLOREDIT` 的 wParam 是 HDC、lParam 才是控件句柄**（写反会让 EDIT 变白底）。
@@ -115,6 +121,8 @@ MiniLaunch/src/
 15. **W 版 API 必须写 `CharSet = CharSet.Unicode`**：漏了它，`StringBuilder` 会按 ANSI/GBK 解码 UTF-16 字节流，`"docker"` 会读成 `"d"`（表现为「只能按首字母搜索」）。新增任何带 `string`/`StringBuilder` 的 `DllImport` 都要检查这一点。
 16. **单行 `EDIT` 的文字贴客户区顶部**：`EM_SETRECT(NP)` 只对多行控件生效，要垂直居中只能把控件本身按行高摆好（见 `LayoutEdit`）。
 17. **高版本系统 API 必须降级**：`SetProcessDpiAwarenessContext`（Win10 1703+）、`GetDpiForWindow`（Win10 1607+）在老系统上直接 P/Invoke 会抛 `EntryPointNotFoundException` **直接崩**。统一走 `Dpi.EnableAwareness()`（降级到 `SetProcessDPIAware`）与 `Dpi.ForWindow()`（降级到 `GetDeviceCaps(LOGPIXELSX)`）；`DwmSetWindowAttribute`（Win8+）已在 `Theme.ApplyModernFrame` 的 try/catch 里。
+18. **子进程管道必须显式指定编码**：`Process.StandardOutput` 默认按「**父进程控制台代码页**」解码（本机 GBK），而 powershell 按 `[Console]::OutputEncoding=UTF8` 输出的是 UTF-8 → 中文乱码；更糟的是 GBK 双字节解码会把 JSON 里的 `"` 吞掉，抛 `JsonException: FoundInvalidCharacter`，**UWP 列表全丢且缓存永远写不出来**（于是每次启动都白跑一次 1.3s 的 powershell）。必须在 `ProcessStartInfo` 里设 `StandardOutputEncoding = Encoding.UTF8`（同理 `StandardErrorEncoding`）。读 stderr 要用 `ReadToEndAsync` 并行，否则管道写满会死锁。
+19. **扫描分两阶段**：开始菜单/注册表约 30ms，先发布让窗口有内容；UWP 需拉 powershell（首次 ~1.3s），等窗口首次显示（`Program.NotifyFirstShown`）后再做——开机自启常驻时完全不占启动资源。`uwp-cache.json` 里要有一条**空名哨兵**记录扫描时间戳，否则 0 条时会被当成“无缓存”而每次重跑 powershell。
 
 ## 运行环境兼容性
 
@@ -146,7 +154,7 @@ _footerY/_footerH   底部快捷键栏（38）
 ## 工作方式约定
 
 - 先读 `方案.md` / `详细计划.md` / `审查记录.md` 再动结构性代码；功能裁剪清单在 `方案.md` 第八节（插件/剪贴板/截图/同步等**明确不做**）。
-- 改动完成的标准：`dotnet build` 0 警告 0 错误 + `--selftest` 全绿（当前基线 38 项通过）。新增能力时同步加断言到 `SelfTest.cs`。
+- 改动完成的标准：`dotnet build` 0 警告 0 错误 + `--selftest` 全绿（当前基线 45 项通过）。新增能力时同步加断言到 `SelfTest.cs`。
 - 注释与 UI 文案用中文，风格与现有文件一致（`file-scoped namespace`、`static` 工具类、紧凑写法）。
 - 本地 git 仓库已初始化（分支 `master`）；提交前先跑构建与自检，提交信息用中文简述「做了什么 + 为什么」。
 - 本机 bash 输出可能被 rtk 钩子压缩（行被折叠成裸花括号），需要看完整源码请用 read 工具而非 cat/head。
