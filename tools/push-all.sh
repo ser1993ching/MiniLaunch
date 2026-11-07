@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键推送到所有远端（github + gitea）
+# 一键推送到所有远端（github + gitee）
 # 用法：bash tools/push-all.sh [分支名]   默认 master
 set -euo pipefail
 

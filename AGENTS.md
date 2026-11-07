@@ -157,7 +157,8 @@ _footerY/_footerH   底部快捷键栏（38）
 - 改动完成的标准：`dotnet build` 0 警告 0 错误 + `--selftest` 全绿（当前基线 45 项通过）。新增能力时同步加断言到 `SelfTest.cs`。
 - 提交后会自动推送 GitHub（全局 git hook，见 `tools/install-autopush-hook.sh`）：
   每次 `git commit` 触发 `post-commit` → 先用 `git ls-remote` 判断 **GitHub 上是否已创建对应仓库**，
-  存在才推，不存在则跳过（不报错）；推送到 GitHub 以外的其他远端（如 gitea）需手动 `git push gitea master`。
+  存在才推，不存在则跳过（不报错）；推送到 GitHub 以外的其他远端（如 gitee）需手动 `git push gitee master`，
+  或用 `bash tools/push-all.sh` 一次推到所有远端（origin=GitHub，gitee=Gitee）。
   单次关闭：`ML_NO_AUTOPUSH=1 git commit ...`；单仓库关闭：`git config autoPush.enabled false`。
 - 注释与 UI 文案用中文，风格与现有文件一致（`file-scoped namespace`、`static` 工具类、紧凑写法）。
 - 本地 git 仓库已初始化（分支 `master`）；提交前先跑构建与自检，提交信息用中文简述「做了什么 + 为什么」。
