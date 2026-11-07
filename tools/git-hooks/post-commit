@@ -1,0 +1,114 @@
+#!/bin/sh
+# =============================================================================
+#  全局 post-commit hook —— 提交后自动推送到 GitHub
+#
+#  行为：
+#    1. 只推送到 GitHub 远端（任何 url 含 github.com 的 remote）
+#    2. 推送前先判断 GitHub 上是否已存在对应仓库
+#         - 不存在        → 跳过（不报错，不做任何推送）
+#         - 存在且可访问  → 自动 push
+#    3. 已在远端且没有新提交 → 跳过
+#
+#  关闭方式（任选其一）：
+#    - 单次：  ML_NO_AUTOPUSH=1 git commit ...
+#    - 单仓库：git config autoPush.enabled false
+#    - 单仓库：在 .git/ 下放一个 ML_NO_AUTOPUSH 空文件
+#
+#  安装：bash tools/install-autopush-hook.sh
+# =============================================================================
+
+set -u
+
+say() { printf '[auto-push] %s\n' "$*" >&2; }
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+gitdir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+case "$gitdir" in /*) ;; *) gitdir="$repo_root/$gitdir" ;; esac
+
+# ---------------------------------------------------------------- 0. 开关
+[ "${ML_NO_AUTOPUSH:-0}" = "1" ] && exit 0
+[ -f "$gitdir/ML_NO_AUTOPUSH" ] && exit 0
+[ "$(git config --get autoPush.enabled 2>/dev/null)" = "false" ] && exit 0
+
+# ------------------------------------------------- 1. 仓库自带的 post-commit
+# 设置了全局 core.hooksPath 之后，仓库 .git/hooks 下的同名钩子不会再被触发，
+# 这里手动转交，保证各仓库原有的钩子照常执行。
+if [ -x "$gitdir/hooks/post-commit" ]; then
+  "$gitdir/hooks/post-commit" || true
+fi
+
+# ------------------------------------------------------------- 2. 当前分支
+branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || exit 0
+[ -n "$branch" ] || exit 0
+
+# ------------------------------------------------------- 3. 找到 GitHub 远端
+remote=""
+url=""
+for r in $(git remote 2>/dev/null); do
+  u=$(git remote get-url "$r" 2>/dev/null) || continue
+  case "$u" in
+    *github.com*) remote="$r"; url="$u"; break ;;
+  esac
+done
+if [ -z "$remote" ]; then
+  say "跳过：当前仓库没有 GitHub 远端"
+  exit 0
+fi
+
+# --------------------------------------------------- 4. 解析 owner/repo 名
+slug=""
+case "$url" in
+  git@github.com:*)      slug=${url#git@github.com:};     slug=${slug%.git} ;;
+  ssh://git@github.com/*) slug=${url#ssh://git@github.com/}; slug=${slug%.git} ;;
+  https://github.com/*)   slug=${url#https://github.com/};  slug=${slug%.git} ;;
+  http://github.com/*)    slug=${url#http://github.com/};   slug=${slug%.git} ;;
+esac
+slug=${slug%/}
+
+# ----------------------------------------- 5. 判断 GitHub 上仓库是否已存在
+# 优先用 ls-remote 探测（走 SSH 凭据，私有仓库同样有效）：
+#   - 远端可达且返回 0 → 仓库存在（哪怕是刚建的空仓库）
+#   - 远端不可达      → 再用公开 API 二次确认，404 基本可断定"还没创建"
+if ! git ls-remote "$remote" >/dev/null 2>&1; then
+  code=""
+  if command -v curl >/dev/null 2>&1 && [ -n "$slug" ]; then
+    code=$(curl -sS -m 15 -o /dev/null -w '%{http_code}' \
+           "https://api.github.com/repos/$slug" 2>/dev/null || echo 000)
+  fi
+  if [ "$code" = "404" ]; then
+    say "跳过：GitHub 上还没有创建仓库 $slug（本次不推送）"
+  else
+    say "跳过：$remote 不可访问，仓库可能未创建或无权限（本次不推送）"
+  fi
+  exit 0
+fi
+
+# ------------------------------------------------------------ 6. 推送到远端
+dry=""
+[ "${ML_AUTOPUSH_DRYRUN:-0}" = "1" ] && dry="--dry-run"
+
+if git rev-parse --verify --quiet '@{u}' >/dev/null 2>&1; then
+  ahead=$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)
+  if [ "$ahead" = "0" ]; then
+    say "跳过：$branch 没有新提交"
+    exit 0
+  fi
+  if ! out=$(git push $dry "$remote" "HEAD:refs/heads/$branch" 2>&1); then
+    say "推送失败：$remote $branch"
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    exit 0
+  fi
+else
+  if ! out=$(git push $dry --set-upstream "$remote" "HEAD:refs/heads/$branch" 2>&1); then
+    say "推送失败：$remote $branch"
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    exit 0
+  fi
+fi
+
+if [ -n "$dry" ]; then
+  say "试运行：$remote $branch 可推送（dry-run，未真正推送）"
+else
+  say "已推送到 $remote $branch"
+fi
+exit 0

@@ -1,0 +1,6 @@
+#!/bin/sh
+# 全局钩子转交器：把调用转交给仓库自己的 commit-msg。
+gitdir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+h="$gitdir/hooks/commit-msg"
+if [ -x "$h" ]; then exec "$h"; fi
+exit 0
