@@ -45,6 +45,24 @@ public static class Launcher
         catch { }
     }
 
+    /// <summary>直接打开一个目录（资源管理器窗口）。</summary>
+    public static void OpenFolder(string path)
+    {
+        if (string.IsNullOrEmpty(path) || !Directory.Exists(path)) return;
+        try
+        {
+            var info = new Win32.SHELLEXECUTEINFOW
+            {
+                cbSize = Marshal.SizeOf<Win32.SHELLEXECUTEINFOW>(),
+                lpFile = "explorer.exe",
+                lpParameters = "\"" + path + "\"",
+                nShow = Win32.SW_SHOWNORMAL,
+            };
+            Win32.ShellExecuteExW(ref info);
+        }
+        catch { }
+    }
+
     public static bool SetClipboardText(IntPtr owner, string text)
     {
         try

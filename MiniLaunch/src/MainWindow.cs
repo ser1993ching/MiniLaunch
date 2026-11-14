@@ -326,6 +326,11 @@ public sealed class MainWindow
                 if (_icons.Pump()) Win32.InvalidateRect(h, IntPtr.Zero, false);
                 return IntPtr.Zero;
 
+            case Win32.WM_APP_PICK_FOLDER:
+                // 托盘「添加文件夹…」与调试入口：选目录 → 起名 → 写入 config.json
+                Program.PickAndAddFolder(h);
+                return IntPtr.Zero;
+
             case Win32.WM_APP_TRAY:
                 Tray.HandleTrayMessage(l, h);
                 return IntPtr.Zero;
@@ -537,14 +542,21 @@ public sealed class MainWindow
     {
         var e = _results[idx];
         var m = Win32.CreatePopupMenu();
-        Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)1, "打开");
-        Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)2, "以管理员身份运行");
-        bool canReveal = e.RevealPath.Length > 0 && (File.Exists(e.RevealPath) || Directory.Exists(e.RevealPath));
+        Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)1, e.IsFolder ? "打开文件夹" : "打开");
+        // 文件夹没有「管理员运行」这回事，置灰避免误解
+        if (e.IsFolder)
+            Win32.AppendMenuW(m, Win32.MF_STRING | Win32.MF_GRAYED, (UIntPtr)2, "以管理员身份运行");
+        else
+            Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)2, "以管理员身份运行");
+        bool canReveal = e.IsFolder
+            ? ParentDir(e.LaunchPath) != null
+            : (e.RevealPath.Length > 0 && (File.Exists(e.RevealPath) || Directory.Exists(e.RevealPath)));
         Win32.AppendMenuW(m, Win32.MF_STRING | (canReveal ? 0u : Win32.MF_GRAYED), (UIntPtr)3, "打开所在位置");
         Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)4, "复制路径");
         if (e.Source == EntrySource.Custom)
         {
             Win32.AppendMenuW(m, Win32.MF_SEPARATOR, UIntPtr.Zero, null);
+            Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)6, "重命名…");
             Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)5, "从启动器删除");
         }
         Win32.SetForegroundWindow(Hwnd);
@@ -556,10 +568,31 @@ public sealed class MainWindow
         {
             case 1: _onLaunch(e, false); break;
             case 2: _onLaunch(e, true); break;
-            case 3: Launcher.Reveal(e.RevealPath); break;
+            case 3:
+                if (e.IsFolder)
+                {
+                    string? parent = ParentDir(e.LaunchPath);
+                    if (parent != null) Launcher.OpenFolder(parent);
+                }
+                else Launcher.Reveal(e.RevealPath);
+                break;
             case 4: Launcher.SetClipboardText(Hwnd, e.DisplayPath); break;
             case 5: RemoveCustom(e); break;
+            case 6: Program.RenameCustom(e); break;
         }
+    }
+
+    /// <summary>取父目录；根目录（如 C:\）没有父目录，返回 null。</summary>
+    static string? ParentDir(string path)
+    {
+        try
+        {
+            string p = path.Trim().TrimEnd('\\');
+            int i = p.LastIndexOf('\\');
+            if (i <= 0) return null;
+            return p.Substring(0, i);
+        }
+        catch { return null; }
     }
 
     void RemoveCustom(Entry e)
@@ -682,13 +715,13 @@ public sealed class MainWindow
             int textX = iconX + _icon + Scale(12);
             int textR = row.R - Scale(10);
 
-            // 管理员标记（右侧，先算宽度再决定标题可用宽度）
-            if (e.RunAs)
+            // 右侧标记（管理员 / 文件夹），先算宽度再决定标题可用宽度
+            if (e.RunAs || e.IsFolder)
             {
                 Win32.SelectObject(hdc, _fontSmall);
-                Win32.SetTextColor(hdc, (int)(selected ? Theme.TextOnSelSub : Theme.Warn));
+                Win32.SetTextColor(hdc, (int)(selected ? Theme.TextOnSelSub : (e.IsFolder ? Theme.TextDim : Theme.Warn)));
                 var rTag = new Win32.RECT { L = textR - Scale(52), T = y, R = textR, B = y + _rowH };
-                Win32.DrawTextW(hdc, "管理员", -1, ref rTag, Theme.AlignRight);
+                Win32.DrawTextW(hdc, e.IsFolder ? "文件夹" : "管理员", -1, ref rTag, Theme.AlignRight);
                 textR -= Scale(58);
             }
 

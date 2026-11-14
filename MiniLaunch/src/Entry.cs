@@ -16,6 +16,7 @@ public sealed class Entry
     public string HayLower = "";       // 预构建检索串（名称+拼音别名+关键字+路径）
     public string UniqueKey = "";      // 使用统计键：来源+小写名
     public string RevealPath = "";     // “打开所在位置”目标
+    public bool IsFolder;              // 文件夹条目（回车进入目录，不是启动程序）
 
     public static string NormName(string s) => s.Trim().ToLowerInvariant();
 

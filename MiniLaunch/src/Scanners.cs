@@ -14,11 +14,15 @@ public static class Scanners
         foreach (var c in cfg.Custom)
         {
             if (string.IsNullOrWhiteSpace(c.Path)) continue;
+            string path = c.Path.Trim();
             string name = string.IsNullOrWhiteSpace(c.Name)
-                ? Path.GetFileNameWithoutExtension(c.Path)
+                ? Path.GetFileNameWithoutExtension(path)
                 : c.Name;
-            list.Add(Make(name, c.Path.Trim(), c.Args?.Trim() ?? "", EntrySource.Custom,
-                iconRef: c.Path, keywords: c.Keywords, workDir: c.WorkDir ?? "", runAs: c.RunAs));
+            // 文件夹判定：配置里显式标记，或路径确实是一个存在的目录（兼容旧配置/拖入的目录）
+            bool isFolder = c.IsFolder || Directory.Exists(path);
+            list.Add(Make(name, path, c.Args?.Trim() ?? "", EntrySource.Custom,
+                iconRef: path, keywords: c.Keywords, workDir: c.WorkDir ?? "", runAs: c.RunAs,
+                isFolder: isFolder));
         }
         return list;
     }
@@ -323,7 +327,8 @@ public static class Scanners
 
     // ============ 条目构建 ============
     public static Entry Make(string name, string launchPath, string args, EntrySource src,
-        string iconRef, string keywords = "", string workDir = "", int iconIndex = 0, bool runAs = false)
+        string iconRef, string keywords = "", string workDir = "", int iconIndex = 0, bool runAs = false,
+        bool isFolder = false)
     {
         var e = new Entry
         {
@@ -335,11 +340,13 @@ public static class Scanners
             IconRef = iconRef ?? "",
             IconIndex = iconIndex,
             Source = src,
+            IsFolder = isFolder,
         };
         e.NameLower = name.ToLowerInvariant();
         string alias = Pinyin.Lookup(name);
         string fileLower = SafeLowerFileName(launchPath);
         string dirLower = SafeLowerDir(launchPath);
+        // 文件夹条目的检索串里已含目录自身的名字（fileLower = 目录名），别名不同也能搜到
         e.HayLower = (e.NameLower + " " + alias + " " + (keywords ?? "").ToLowerInvariant() + " " + fileLower + " " + dirLower).Trim();
         e.UniqueKey = src + ":" + e.NameLower;
         e.RevealPath = src == EntrySource.Uwp ? "" : launchPath;

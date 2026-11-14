@@ -37,6 +37,7 @@ internal static class Win32
     public const int WM_APP_TRAY = WM_APP + 2;
     public const int WM_APP_SCAN_DONE = WM_APP + 3;
     public const int WM_APP_ICON_READY = WM_APP + 4;
+    public const int WM_APP_PICK_FOLDER = WM_APP + 5;   // 打开文件夹选择对话框
 
     public const int EN_CHANGE = 0x0300;
 
@@ -191,6 +192,23 @@ internal static class Win32
     public const uint NIIF_INFO = 1;
     public const uint NIIF_NOSOUND = 0x10;   // 气泡通知不播「通知」系统音
 
+    // ===== shell32：文件夹选择对话框（SHBrowseForFolder）=====
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct BROWSEINFO
+    {
+        public IntPtr hwndOwner;
+        public IntPtr pidlRoot;
+        public IntPtr pszDisplayName;   // LPWSTR：由调用方分配（Unicode），返回后读取并释放
+        public string? lpszTitle;
+        public uint ulFlags;
+        public IntPtr lpfn;             // BFFCALLBACK
+        public IntPtr lParam;
+        public int iImage;
+    }
+    public const uint BIF_RETURNONLYFSDIRS = 0x0001;  // 只允许选文件夹
+    public const uint BIF_NEWDIALOGSTYLE = 0x0040;   // 新式树形对话框（可新建文件夹）
+    public const uint BIF_EDITBOX = 0x0002;          // 底部带路径输入框
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct OPENFILENAMEW
     {
@@ -249,6 +267,11 @@ internal static class Win32
 
     [DllImport("user32.dll")]
     public static extern int GetMessageW(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
+
+    /// <summary>查看消息队列但不阻塞（等待模态对话框时保持 UI 响应）。</summary>
+    [DllImport("user32.dll")]
+    public static extern bool PeekMessageW(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax, uint wRemoveMsg);
+    public const uint PM_REMOVE = 0x1;
 
     [DllImport("user32.dll")]
     public static extern bool TranslateMessage(ref MSG lpMsg);
@@ -468,10 +491,28 @@ internal static class Win32
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     public static extern bool Shell_NotifyIconW(uint dwMessage, ref NOTIFYICONDATAW lpData);
 
+    /// <summary>文件夹浏览对话框：返回 PIDL（用完必须 CoTaskMemFree），用户取消返回 0。</summary>
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr SHBrowseForFolderW(ref BROWSEINFO lbbi);
+
+    /// <summary>把 PIDL 转成目录路径（Unicode）。</summary>
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool SHGetPathFromIDListW(IntPtr pidl, StringBuilder pszPath, int cchMax);
+
     [DllImport("shell32.dll")] public static extern void DragAcceptFiles(IntPtr hWnd, bool fAccept);
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     public static extern uint DragQueryFileW(IntPtr hDrop, uint iFile, StringBuilder? lpszFile, uint cch);
     [DllImport("shell32.dll")] public static extern void DragFinish(IntPtr hDrop);
+
+    // ===== ole32 =====
+    [DllImport("ole32.dll")]
+    public static extern int CoInitializeEx(IntPtr pvReserved, uint dwCoInit);
+    public const uint COINIT_APARTMENTTHREADED = 0x2;
+    [DllImport("ole32.dll")]
+    public static extern void CoUninitialize();
+    /// <summary>释放 Shell 返回的 COM 内存（SHBrowseForFolder 的 PIDL）。</summary>
+    [DllImport("ole32.dll")]
+    public static extern void CoTaskMemFree(IntPtr pv);
 
     // ===== comdlg32 =====
     [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, SetLastError = true)]

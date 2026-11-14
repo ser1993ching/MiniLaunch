@@ -58,6 +58,7 @@ public static class Program
         _cfg = ConfigStore.LoadConfig();
         _usage = ConfigStore.LoadUsage();
 
+
         // 开机自启自愈：注册表是「真相源」，config.json 只是用户意图的备份。
         // 历史问题「设了开机自启但重启后没启动」的根因就是：注册表项指向的文件
         // 失效了（构建目录被清理/搬走），却没有任何人修正它。
@@ -111,6 +112,19 @@ public static class Program
             _win.PreviewMode = true;
             HotkeyDialog.PreviewMode = true;
             ShowHotkeySettings();
+        }
+        // 名称输入窗预览（调试/截图用）
+        if (args.Contains("--name-dialog"))
+        {
+            _win.PreviewMode = true;
+            NameDialog.Show("添加文件夹", @"D:\项目\MiniLaunch", "MiniLaunch", _ => true);
+        }
+        // 文件夹选择对话框预览（调试用）：选完直接进名称输入窗
+        if (args.Contains("--pick-folder"))
+        {
+            _win.PreviewMode = true;
+            // 延后到消息循环起来之后再弹（SHBrowseForFolder 是模态框，需要消息泵）
+            Win32.PostMessageW(_win.Hwnd, Win32.WM_APP_PICK_FOLDER, IntPtr.Zero, IntPtr.Zero);
         }
 
         AppDomain.CurrentDomain.ProcessExit += (s, e) => ConfigStore.SaveUsage(_usage);
@@ -236,7 +250,7 @@ public static class Program
                 }
                 catch { }
             }
-            _cfg.Custom.Add(new CustomEntry { Name = name, Path = f });
+            _cfg.Custom.Add(new CustomEntry { Name = name, Path = f, IsFolder = isDir });
             added = true;
         }
         if (added)
@@ -244,6 +258,70 @@ public static class Program
             ConfigStore.SaveConfig(_cfg);
             StartScan(true);
         }
+    }
+
+    // ================= 文件夹快捷入口 =================
+    /// <summary>托盘菜单「添加文件夹…」：选目录 → 起名 → 写入 config.json。</summary>
+    public static void PickAndAddFolder(IntPtr owner)
+    {
+        // 不把主窗口当对话框的 owner：选择框跑在另一个（STA）线程上，而主窗口在失焦时会
+        // 自己隐藏（WM_ACTIVATE → HideWin），被拥有的对话框会跟着消失 → 用户看不到选目录窗口。
+        string? dir = FolderPicker.Pick(IntPtr.Zero, "选择要快速进入的文件夹");
+        if (string.IsNullOrEmpty(dir)) return;
+        NameDialog.Show("添加文件夹", dir, DefaultFolderName(dir), name =>
+        {
+            AddFolder(name, dir);
+            return true;
+        });
+    }
+
+    /// <summary>目录默认显示名：取目录名本身（根目录则用路径）。</summary>
+    static string DefaultFolderName(string dir)
+    {
+        try
+        {
+            string n = new DirectoryInfo(dir.TrimEnd('\\')).Name;
+            return string.IsNullOrEmpty(n) ? dir : n;
+        }
+        catch { return dir; }
+    }
+
+    /// <summary>写入一个文件夹快捷条目；同一路径已存在时只更新名称。</summary>
+    public static bool AddFolder(string name, string path)
+    {
+        path = path.Trim();
+        if (path.Length == 0) return false;
+        bool changed = false;
+        foreach (var c in _cfg.Custom)
+        {
+            if (!c.Path.Equals(path, StringComparison.OrdinalIgnoreCase)) continue;
+            c.Name = name;
+            c.IsFolder = true;
+            changed = true;
+            break;
+        }
+        if (!changed)
+            _cfg.Custom.Add(new CustomEntry { Name = name, Path = path, IsFolder = true });
+        ConfigStore.SaveConfig(_cfg);
+        StartScan(true);
+        return true;
+    }
+
+    /// <summary>重命名自定义条目（文件夹快捷入口改名）。</summary>
+    public static void RenameCustom(Entry e)
+    {
+        NameDialog.Show("重命名", e.DisplayPath, e.Name, name =>
+        {
+            foreach (var c in _cfg.Custom)
+            {
+                if (!c.Path.Equals(e.LaunchPath, StringComparison.OrdinalIgnoreCase)) continue;
+                c.Name = name;
+                ConfigStore.SaveConfig(_cfg);
+                StartScan(true);
+                return true;
+            }
+            return false;
+        });
     }
 
     public static void PickAndAddFile(IntPtr owner)

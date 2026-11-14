@@ -152,6 +152,65 @@ public static class SelfTest
         var usage2 = ConfigStore.LoadUsage();
         Check(usage2.Recs.Count == 1 && usage2.Recs["x"].Count == 3, "用量库保存/加载回环");
 
+        // ---- 2b. 文件夹快捷入口：配置字段 / 旧配置兼容 / 扫描识别 ----
+        string folderDir = Path.Combine(Path.GetTempPath(), "MiniLaunch-folder-" + Guid.NewGuid().ToString("N")[..6]);
+        Directory.CreateDirectory(folderDir);
+        try
+        {
+            var cfgF = new AppConfig
+            {
+                Custom =
+                {
+                    new CustomEntry { Name = "工作", Path = folderDir, IsFolder = true },
+                    new CustomEntry { Name = "记事本", Path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "notepad.exe") },
+                },
+            };
+            ConfigStore.SaveConfig(cfgF);
+            var cfgF2 = ConfigStore.LoadConfig();
+            Check(cfgF2.Custom.Count == 2 && cfgF2.Custom[0].IsFolder && !cfgF2.Custom[1].IsFolder,
+                "文件夹标记 IsFolder 写入/读取回环");
+
+            // 旧配置（没有 IsFolder 字段）→ 路径确实是目录时仍要识别为文件夹
+            File.WriteAllText(Paths.ConfigPath,
+                "{\"Hotkey\":\"Ctrl+Space\",\"Custom\":[{\"Name\":\"旧目录\",\"Path\":\"" +
+                folderDir.Replace("\\", "\\\\") + "\"}]}");
+            var legacy = ConfigStore.LoadConfig();
+            Check(legacy.Custom.Count == 1 && !legacy.Custom[0].IsFolder, "旧配置缺少 IsFolder 字段时默认 false");
+            var legacyEntries = Scanners.ScanCustom(legacy);
+            Check(legacyEntries.Count == 1 && legacyEntries[0].IsFolder, "旧配置按目录路径自动识别为文件夹");
+
+            var fEntries = Scanners.ScanCustom(cfgF2);
+            var fEntry = fEntries.FirstOrDefault(e => e.IsFolder);
+            Check(fEntry != null && fEntry.LaunchPath == folderDir && fEntry.Name == "工作",
+                "文件夹条目字段完整（名称/路径）");
+            Check(fEntry != null && fEntry.IconRef == folderDir, "文件夹条目图标来源为目录本身");
+            Check(fEntries.Any(e => !e.IsFolder && e.Name == "记事本"), "普通程序条目不被误判为文件夹");
+
+            // 空查询：自定义文件夹置顶（“常用文件夹”一眼看到）
+            var engF = new SearchEngine(new UsageDb());
+            engF.SetEntries(fEntries);
+            var idleF = engF.Query("", 10);
+            Check(idleF.Count > 0 && idleF[0].IsFolder, "空查询时自定义文件夹排在最前");
+            // 按别名搜索
+            var hitF = engF.Query("工作", 10);
+            Check(hitF.Count == 1 && hitF[0].IsFolder, "按别名搜索到文件夹条目");
+            // 按目录名搜索（别名与真实目录名不同时也能搜到）
+            var hitF2 = engF.Query(new DirectoryInfo(folderDir).Name.ToLowerInvariant(), 10);
+            Check(hitF2.Count >= 1, "按真实目录名也能搜到文件夹");
+
+            // 目录图标：SHGetFileInfo 对目录要能拿到「文件夹」图标（否则会退化成文档图标）
+            var fiF = new Win32.SHFILEINFOW();
+            IntPtr rF = Win32.SHGetFileInfoW(folderDir, 0, ref fiF,
+                (uint)Marshal.SizeOf<Win32.SHFILEINFOW>(), Win32.SHGFI_ICON | Win32.SHGFI_LARGEICON);
+            Check(rF != IntPtr.Zero && fiF.hIcon != IntPtr.Zero, "目录图标可提取（SHGetFileInfo）",
+                $"r={rF} hIcon={fiF.hIcon}");
+            if (fiF.hIcon != IntPtr.Zero) Win32.DestroyIcon(fiF.hIcon);
+        }
+        finally
+        {
+            try { Directory.Delete(folderDir, true); } catch { }
+        }
+
         // ---- 3. 拼音别名 ----
         Check(Pinyin.Lookup("微信").Contains("wx"), "拼音别名 微信→wx");
         Check(Pinyin.Lookup("企业微信").Contains("qywx"), "拼音别名 企业微信→qywx");

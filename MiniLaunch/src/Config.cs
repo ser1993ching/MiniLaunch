@@ -11,6 +11,11 @@ public class CustomEntry
     public string WorkDir { get; set; } = "";
     public bool RunAs { get; set; }
     public string Keywords { get; set; } = "";
+    /// <summary>
+    /// 是否为「文件夹」条目：回车直接进入该目录（资源管理器）。
+    /// 旧配置没有这个字段时按默认值 false 处理；扫描时若路径确实是目录，会自动推断为文件夹。
+    /// </summary>
+    public bool IsFolder { get; set; }
 }
 
 public class AppConfig

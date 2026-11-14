@@ -102,6 +102,7 @@ public static class Tray
         Win32.AppendMenuW(menu, Win32.MF_STRING, 100, "显示主窗口");
         Win32.AppendMenuW(menu, Win32.MF_STRING, 106, "设置热键…（" + Program.Cfg.Hotkey + "）");
         Win32.AppendMenuW(menu, Win32.MF_STRING, 101, "添加程序…");
+        Win32.AppendMenuW(menu, Win32.MF_STRING, 110, "添加文件夹…");
         Win32.AppendMenuW(menu, Win32.MF_STRING, 102, "重新扫描");
         // 勾选状态以**注册表**为准（真相源），而不是 config.json：
         // 否则注册表项被清理工具删掉后，菜单仍显示已勾选，用户却一直找不到原因。
@@ -127,6 +128,7 @@ public static class Tray
             case 100: MainWindow.Instance?.ShowWin(); break;
             case 106: Program.ShowHotkeySettings(); break;
             case 101: Program.PickAndAddFile(hwnd); break;
+            case 110: Program.PickAndAddFolder(hwnd); break;
             case 102: Program.StartScan(true); break;
             case 103: Program.ToggleAutoStart(); break;
             case 104: Program.OpenConfig(); break;

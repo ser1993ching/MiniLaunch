@@ -30,7 +30,7 @@ dotnet publish -c Release -r win-x64 --self-contained \
   -o "E:\code\_tmp_publish"
 cp /e/code/_tmp_publish/MiniLaunch.exe /e/code/_tmp_publish/MiniLaunch.pdb \
    "/e/code/启动器/publish/win-x64/"
-# 发布后必须核对：./MiniLaunch.exe --selftest 应显示 60 项通过（拿到旧产物会显示 45/38）
+# 发布后必须核对：./MiniLaunch.exe --selftest 应显示 70 项通过（拿到旧产物会显示 60/45/38）
 ```
 
 开发辅助（仅调试用，发布不包含）：
@@ -40,6 +40,10 @@ cp /e/code/_tmp_publish/MiniLaunch.exe /e/code/_tmp_publish/MiniLaunch.pdb \
 MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --preview
 # 热键录制窗预览
 MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --hotkey-dialog
+# 名称输入窗预览（文件夹快捷入口起名）
+MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --preview --name-dialog
+# 文件夹选择对话框预览（验证 STA 线程方案，见坑 #28）
+MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --preview --pick-folder
 # 预填搜索词（排查搜索/排版问题；建议配合 --preview）
 MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --preview --query docker
 
@@ -85,7 +89,9 @@ MiniLaunch/src/
   MainWindow.cs  无边框 WS_POPUP + 原生 EDIT 子类化 + 自绘双缓冲列表 + 拖放 + DPI + 右键菜单 + 失焦隐藏
   AutoStart.cs   开机自启：HKCU Run 项读写（写入后回读校验）+ 启动自愈 + 安装到本地 + 任务计划
   HotkeyDialog.cs 热键录制小窗（按下即生效，Esc 取消）
-  Tray.cs        托盘菜单（设置热键 / 添加程序 / 重新扫描 / 开机自启 / 开机自启诊断 / 安装到本地 / 注册登录自启任务 / 开机自启 / 退出）
+  Tray.cs        托盘菜单（设置热键 / 添加程序 / 添加文件夹 / 重新扫描 / 开机自启 / 开机自启诊断 / 安装到本地 / 注册登录自启任务 / 开机自启 / 退出）
+  FolderPicker.cs 文件夹选择对话框（SHBrowseForFolder，必须在 STA 线程执行，见坑 #28）
+  NameDialog.cs  名称输入小窗（给文件夹快捷入口起名 / 重命名，Enter 确认 · Esc 取消）
   NativeOut.cs   管道 stdout 输出（WinExe 无控制台）
   SelfTest.cs    --selftest 全部断言
 方案.md / 详细计划.md / 审查记录.md   设计依据与已知问题处置（改架构前先读）
@@ -97,6 +103,9 @@ MiniLaunch/src/
 
 `%APPDATA%\MiniLaunch\`：`config.json`（热键/自启/自定义条目）、`usage.json`（使用次数与时间）、`uwp-cache.json`（UWP 条目 + 一条空名“哨兵”记录扫描时间戳，0 条时也要写，否则每次启动都会重跑 powershell）。
 写入一律走 `ConfigStore.SaveAtomic`（写 `.tmp` 再替换）。改配置格式要兼容旧文件（缺字段用默认值，`LoadConfig` 已有 try-catch 兜底）。
+
+**自定义条目**：`config.json` 的 `Custom[]`，每项含 `Name/Path/Args/WorkDir/RunAs/Keywords/IsFolder`。
+`IsFolder=true` 表示这是「文件夹快捷入口」（回车直接进目录，右键菜单里的「管理员运行」会置灰）。旧文件没这个字段时按 `false` 处理，扫描时再用 `Directory.Exists` 兜底推断（见坑 #29）。
 
 **默认热键 `Ctrl+Space`**（`HotkeyParser.DefaultHotkey`）。它常被中文输入法占用：
 - 注册失败只弹气泡，不崩溃、不自动改配置；
@@ -135,6 +144,8 @@ MiniLaunch/src/
    **反向注意**：`0x01(^A)`、`0x03(^C)`、`0x16(^V)`、`0x18(^X)`、`0x1A(^Z)`、`0x08(退格)` 是 EDIT 真正执行的编辑命令，吞了会破坏编辑功能；其中 `^X` 只有**无选区可剪**时才响（属于 EDIT 报「无效操作」），所以按 `EM_GETSEL` 判断选区为空才吞。
    **其他发声点**（一处不改就会漏）：托盘气泡 `Shell_NotifyIcon` 用 `NIIF_INFO` 会播系统「通知」音 → 加 `NIIF_NOSOUND`；`MessageBoxW` 带 `MB_ICON*` 会播对应系统音 → 诊断框只留 `MB_OK`。
    定位手段（可复用）：WASAPI `IAudioMeterInformation.GetPeakValue` 轮询默认渲染设备峰值 + `keybd_event` 注入按键，量出修前 0.6604（51~65 采样）/ 修后 0.0000。注意本机 IME（`OimeTsfNotifyWindow`）会吃掉注入的字母键，验证「打字/剪切」类功能要用 `WM_SETTEXT`+`EM_SETSEL`+剪贴板核对，别依赖注入字母。
+28. **shell 对话框必须在 STA 线程上调用**：`SHBrowseForFolderW`（选文件夹）在 **MTA** 线程上调用时，对话框窗口**会被创建但永远不显示**（`WS_VISIBLE` 没置上，句柄存在却看不见），且不报错。.NET 主线程默认是 MTA（`CoInitializeEx(COINIT_APARTMENTTHREADED)` 会返回 `RPC_E_CHANGED_MODE`），所以本项目的「添加文件夹…」必须放到自建的 STA 线程执行（`FolderPicker.Pick`），并在等待期间用 `PeekMessage` 继续泵消息保持 UI 响应。**改任何 shell 对话框调用都要检查这一点。**
+29. **文件夹条目标记 `IsFolder` 要向后兼容**：旧 `config.json` 没有这个字段（默认 `false`），所以扫描时还要用 `Directory.Exists(path)` 兜底推断，否则老配置里的目录条目会退化成「启动程序」。自检有「旧配置按目录路径自动识别为文件夹」断言。
 
 ## 运行环境兼容性
 
@@ -166,7 +177,7 @@ _footerY/_footerH   底部快捷键栏（38）
 ## 工作方式约定
 
 - 先读 `方案.md` / `详细计划.md` / `审查记录.md` 再动结构性代码；功能裁剪清单在 `方案.md` 第八节（插件/剪贴板/截图/同步等**明确不做**）。
-- 改动完成的标准：`dotnet build` 0 警告 0 错误 + `--selftest` 全绿（当前基线 60 项通过）。新增能力时同步加断言到 `SelfTest.cs`。
+- 改动完成的标准：`dotnet build` 0 警告 0 错误 + `--selftest` 全绿（当前基线 70 项通过）。新增能力时同步加断言到 `SelfTest.cs`。
 - 提交后会自动推送到 GitHub 和 Gitee（全局 git hook，见 `tools/install-autopush-hook.sh`）：
   每次 `git commit` 触发 `post-commit` → 逐个检查 **github.com / gitee.com** 的远端，
   先判断平台上**是否已创建对应仓库**（GitHub 走 `api.github.com`，Gitee 走 `gitee.com/api/v5`），

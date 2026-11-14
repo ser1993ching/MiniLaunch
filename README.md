@@ -99,6 +99,7 @@ The table below shows **measured numbers** (Windows 10/11, Release self-containe
 | **四路来源聚合** | Multi-source aggregation | 自定义条目 > 开始菜单 > 注册表卸载项 > UWP 商店应用，按小写名称去重合并 |
 | **图标缓存** | Icon cache | 图标在**后台线程**提取，UI 绘制只读缓存；LRU 保留 64 项 HICON，驱逐时销毁 |
 | **拖放添加** | Drag & drop | 把 exe / 快捷方式拖进窗口，立即添加为自定义条目并持久化 |
+| **文件夹快速启动** | Folder shortcuts | 托盘菜单「添加文件夹…」选目录并起名，回车直接进目录；常用文件夹在空查询时置顶 |
 | **使用频率排序** | Usage-based ranking | 最近 24 小时用过的条目额外加权，常用程序自然浮到前面 |
 | **托盘菜单** | Tray menu | 设置热键 / 添加程序 / 重新扫描 / 开机自启 / 退出 |
 | **开机自启** | Auto-start | 可选开机常驻；启动时分两阶段扫描，开机不占启动资源 |
@@ -188,11 +189,11 @@ dotnet build
 MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --selftest
 ```
 
-必须**全绿**（当前基线 **45 项通过**），退出码为 `0`。每次改动后请务必执行。
-Must be **all green** (current baseline: **45 assertions passed**) with exit code `0`. Run it after every change.
+必须**全绿**（当前基线 **70 项通过**），退出码为 `0`。每次改动后请务必执行。
+Must be **all green** (current baseline: **70 assertions passed**) with exit code `0`. Run it after every change.
 
 ```
-===== 自检结果: 通过 45 / 失败 0，耗时 1441ms =====
+===== 自检结果: 通过 70 / 失败 0，耗时 1441ms =====
 当前进程工作集: 1.3 MB
 ```
 
@@ -210,7 +211,7 @@ cp /e/code/_tmp_publish/MiniLaunch.exe /e/code/_tmp_publish/MiniLaunch.pdb \
    "/e/code/启动器/publish/win-x64/"
 ```
 
-发布后核对：运行 `./MiniLaunch.exe --selftest`，应显示 **45 项通过**（拿到旧产物只会显示 38）。
+发布后核对：运行 `./MiniLaunch.exe --selftest`，应显示 **70 项通过**（拿到旧产物会显示 60/45/38）。
 
 > 发布**不带** `PublishReadyToRun` —— SDK 的单文件打包器会重建宿主 exe 并丢弃图标资源（PE 里只剩 RCDATA/VERSION/MANIFEST）。
 > Do **not** enable `PublishReadyToRun` — the single-file bundler rebuilds the host executable and drops the embedded icon resource.
@@ -280,7 +281,7 @@ A：直接把 exe 或快捷方式**拖进窗口**，或者用托盘菜单「添�
 A：UWP 列表来自 `Get-StartApps`（powershell），有 7 天磁盘缓存。开机自启常驻时该扫描会推迟到窗口首次显示之后执行，属于正常行为。
 
 **Q：为什么发布产物比预期大 / 图标丢了？**
-A：确认没有开启 `PublishReadyToRun`，并确认用的是**最新**产物（`--selftest` 显示 45 项而不是 38 项）。
+A：确认没有开启 `PublishReadyToRun`，并确认用的是**最新**产物（`--selftest` 显示 70 项而不是 60/45/38）。
 
 ---
 
@@ -347,6 +348,7 @@ Press `Ctrl+Space`, type a few characters, hit `Enter`. Everything else is delib
 | Four-source aggregation | Custom entries > Start Menu > Registry uninstall keys > UWP apps, de-duplicated by lowercase name |
 | Icon cache | Icons are extracted on a **background thread**; the UI only reads the cache. LRU of 64 HICONs, destroyed on eviction |
 | Drag & drop | Drop an `.exe` or a shortcut onto the window to add a custom entry |
+| Folder shortcuts | Tray menu → *Add folder…* picks a directory and names it; Enter opens it directly, and pinned folders stay on top of an empty query |
 | Usage ranking | Apps used in the last 24 hours get an extra boost and float to the top |
 | Tray menu | Set hotkey / Add app / Rescan / Start with Windows / Quit |
 | Fully local | Config and usage stats live in `%APPDATA%\MiniLaunch\`; nothing ever leaves your machine |
@@ -371,7 +373,7 @@ Press `Ctrl+Space`, type a few characters, hit `Enter`. Everything else is delib
 # build (Debug / JIT is enough for day-to-day work)
 cd MiniLaunch && dotnet build
 
-# headless self-test — must be all green (baseline: 45 assertions), exit code 0
+# headless self-test — must be all green (baseline: 70 assertions), exit code 0
 MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --selftest
 
 # publish a self-contained, trimmed single file

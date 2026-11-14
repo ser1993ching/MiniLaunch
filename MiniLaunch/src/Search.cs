@@ -71,6 +71,11 @@ public sealed class SearchEngine
 
     int IdleCompare(Entry a, Entry b)
     {
+        // 自定义文件夹快捷入口置顶：「常用文件夹」要在呼出时一眼看到（用户专门配的入口）。
+        // 其余条目仍按 (使用次数, 最近使用) 排序，不受本规则影响。
+        int fa = (a.Source == EntrySource.Custom && a.IsFolder) ? 0 : 1;
+        int fb = (b.Source == EntrySource.Custom && b.IsFolder) ? 0 : 1;
+        if (fa != fb) return fa.CompareTo(fb);
         // 先比次数、再比最近时间（设计：(Count, LastTicks) 字典序）。
         // 不能把 Count 加权拼进一个 long：Ticks≈6.4e17，次数权重会被完全淹没，
         // 退化成「最近使用」排序（历史 bug，自检有空查询回归断言）。
