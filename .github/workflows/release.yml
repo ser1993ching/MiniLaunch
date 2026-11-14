@@ -37,11 +37,15 @@ jobs:
           -o out
 
       # 无头自检必须全绿（退出码 0），否则不发版
+      # 注意：MiniLaunch.exe 是 WinExe（GUI 子系统），PowerShell 直接调用**不会等待**进程结束，
+      # $LASTEXITCODE 会是 $null → 必须用 Start-Process -Wait -PassThru 取真实退出码。
       - name: Self-test
         shell: pwsh
         run: |
-          .\out\MiniLaunch.exe --selftest
-          if ($LASTEXITCODE -ne 0) { throw "自检未通过，终止发布" }
+          $p = Start-Process -FilePath ".\out\MiniLaunch.exe" -ArgumentList "--selftest" `
+                -Wait -PassThru -NoNewWindow -RedirectStandardOutput "selftest.log"
+          Get-Content "selftest.log" | Select-Object -Last 5
+          if ($p.ExitCode -ne 0) { throw "自检未通过（退出码 $($p.ExitCode)），终止发布" }
 
       - name: Package
         shell: pwsh
