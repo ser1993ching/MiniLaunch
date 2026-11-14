@@ -121,7 +121,7 @@ MiniLaunch/src/
   AutoStart.cs   开机自启：HKCU Run 项读写（写入后回读校验）+ 启动自愈 + 安装到本地
   HotkeyDialog.cs 热键录制小窗（按下即生效，Esc 取消）
   Tray.cs        托盘菜单（显示主窗口 / 设置热键 / 添加程序 / 添加文件夹 / 重新扫描 / 开机自启 / 打开配置文件 / 退出）
-  FolderPicker.cs 文件夹选择对话框（现代「资源管理器风格」IFileDialog + FOS_PICKFOLDERS，必须在 STA 线程执行，见坑 #28/#30）
+  FolderPicker.cs 文件夹选择对话框（现代「资源管理器风格」IFileDialog + FOS_PICKFOLDERS；STA 线程见坑 #28、手工 vtable 见坑 #30/#34）
   NameDialog.cs  名称输入小窗（给文件夹快捷入口起名 / 重命名；Enter 确认 · Esc 取消 · 也可点自绘的「取消 / 确定」按钮）
   NativeOut.cs   管道 stdout 输出（WinExe 无控制台）
   SelfTest.cs    --selftest 全部断言
@@ -177,13 +177,14 @@ MiniLaunch/src/
    定位手段（可复用）：WASAPI `IAudioMeterInformation.GetPeakValue` 轮询默认渲染设备峰值 + `keybd_event` 注入按键，量出修前 0.6604（51~65 采样）/ 修后 0.0000。注意本机 IME（`OimeTsfNotifyWindow`）会吃掉注入的字母键，验证「打字/剪切」类功能要用 `WM_SETTEXT`+`EM_SETSEL`+剪贴板核对，别依赖注入字母。
 28. **shell 对话框必须在 STA 线程上调用**：`SHBrowseForFolderW` / `IFileDialog::Show`（选文件夹）在 **MTA** 线程上调用时，对话框窗口**会被创建但永远不显示**（`WS_VISIBLE` 没置上，句柄存在却看不见），且不报错。.NET 主线程默认是 MTA（`CoInitializeEx(COINIT_APARTMENTTHREADED)` 会返回 `RPC_E_CHANGED_MODE`），所以本项目的「添加文件夹…」必须放到自建的 STA 线程执行（`FolderPicker.Pick`），并在等待期间用 `PeekMessage` 继续泵消息保持 UI 响应。**改任何 shell 对话框调用都要检查这一点。**
 29. **文件夹条目标记 `IsFolder` 要向后兼容**：旧 `config.json` 没有这个字段（默认 `false`），所以扫描时还要用 `Directory.Exists(path)` 兜底推断，否则老配置里的目录条目会退化成「启动程序」。自检有「旧配置按目录路径自动识别为文件夹」断言。
-30. **现代文件夹对话框（IFileDialog）两个大坑**：
+30. **现代文件夹对话框（IFileDialog）三个大坑**：
    - **vtable 槽位顺序 ≠ 微软文档顺序**：文档里 IFileDialog 的方法列表是**按字母排的**，而 COM 调用按 vtable 位置。实际顺序（本机逐槽实测）：`3 Show / 4 SetFileTypes / 5 SetFileTypeIndex / 6 GetFileTypeIndex / 7 Advise / 8 Unadvise / 9 SetOptions / 10 GetOptions / 11 SetFolder / 12 SetDefaultFolder / 13 GetFolder / 14 GetCurrentSelection / 15 SetFileName / 16 GetFileName / 17 SetFileNameLabel / 18 SetDefaultExtension / 19 Close / 20 GetResult`。**按文档顺序写会把 `GetResult` 写到槽 19（Close）上 → 选完目录拿不到结果，表现为「选完又弹出旧的小树形窗」**。自检有「IFileDialog 槽位对齐（GetResult 槽位探测）」断言（未显示时槽 20 返回 `E_UNEXPECTED 0x8000FFFF`，错位则返回别的值）。
-   - **`Marshal.GetObjectForIUnknown` 不会 AddRef**：RCW 直接接管那份引用，**多写一句 `Marshal.Release` 会把对象提前释放掉**——对话框虽然能弹出来，但一关闭对象就死了，`GetResult` 拿不到结果。同理 `GetResult` 交回来的 `IShellItem*` 是**我们**的引用，要自己 `Release`。
+   - **COM 调用必须走手工 vtable，不能用 ComImport 接口**（坑 #34）：裁剪会让 ComImport 封送失效（见 #34），所以 `FolderPicker` 里的 COM 调用全部用 `GetDelegateForFunctionPointer` 手工取槽。裸指针是**我们**的引用：`CoCreateInstance` / `GetResult`（返回 `IShellItem*`）拿到的指针用完都要自己 `Marshal.Release`。
    - 附：CLSID 用 `DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7`（comdlg32.dll 的「File Open Dialog」）、IID 用 `d57c7288-d4ad-4768-be02-9d969532d960`（IID_IFileOpenDialog）；`FOS_PATHMUSTEXIST` 与 `FOS_PICKFOLDERS` 同时使用会被 shell 判为非法（`SetOptions` 返回 `E_INVALIDARG`），所以只留 `PICKFOLDERS|FORCEFILESYSTEM|FILEMUSTEXIST|NOCHANGEDIR`。
 31. **后台线程改共享 List 时 UI 线程可能同时在改它 → 崩进程**：扫描线程 `ScanCustom` 里 `foreach cfg.Custom`，UI 线程（拖放添加 / 添加文件夹 / 重命名 / 删除）会 `Add/RemoveAll` 同一列表，`List<T>` 枚举中变更会抛 `InvalidOperationException`，而后台线程未处理异常 = 整个进程崩溃。`ScanCustom` 已改为快照遍历（`cfg.Custom?.ToArray()`，同时容忍手改 config.json 出现的 `"Custom": null`，`LoadConfig` 会补空列表），扫描线程体另有 catch 兑底。任何后台线程的未处理异常都会崩，不要裸抛。
 32. **热键录制窗的 Alt+F4 是关闭手势，不是组合键**：录制是「按下即生效」，Alt+F4 会被当成组合录进去、全局热键被静默改写并落盘。用 `IsCloseGesture(vk, mods)` 过滤后再走录制。顺带：自绘对话框若把 WM_KEYDOWN/WM_SYSKEYDOWN 一律吞掉，Alt+F4 就关不了窗（NameDialog 只拦 Enter/Esc，其余必须落到 DefWindowProc）。
 33. **UI 线程落盘必须吞异常**：`SaveConfig/SaveUsage` 的调用点几乎都在 UI 线程（启动条目/拖放/退出），杀软/索引器短暂锁住 json 会抛 IOException，在 WndProc 派发里变成未处理异常直接崩。持久化本来就是尽力而为：`SaveConfig/SaveUsage` 内部 catch 空吞（`SaveAtomic` 保持原样，由调用方各自包 try）。自检有「文件被锁定不崩」断言。
+34. **裁剪（PublishTrimmed）会杀死 ComImport 封送**：ILLink 默认把 `BuiltInComInteropSupport` 关到 false → `Marshal.GetObjectForIUnknown` 直接抛 `NotSupported_COM`（被 catch 吞掉后表现为「静默退化」，发布版曾一直回退到旧树形窗，Debug 全绿毫无察觉）；显式强开后，ComImport 接口里**没被调用的方法**又会被裁剪压缩 → vtable 槽位错位，实测 `SetOptions` 直接 AccessViolation。结论：发布配置（单文件+裁剪）里**禁止新增任何 ComImport 接口**，COM 调用一律走手工 vtable（见 `FolderPicker.Vtable<T>`）；改 COM 相关代码必须跑**发布版的** `--selftest`，Debug 版绿不算数。
 
 ## 运行环境兼容性
 

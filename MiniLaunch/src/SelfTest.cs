@@ -257,7 +257,7 @@ public static class SelfTest
         // vtable 槽位对齐回归：GetResult 必须落在槽 20（未显示时返回 E_UNEXPECTED）
         Check(FolderPicker.CanProbeResultSlot(),
             "文件夹选择：IFileDialog 槽位对齐（GetResult 槽位探测）",
-            $"hr=0x{FolderPicker.LastResultSlotHr:X8}");
+            $"hr=0x{FolderPicker.LastResultSlotHr:X8} {FolderPicker.LastProbeError}");
         bool modernOk = FolderPicker.CanCreateModernDialog();
         Check(modernOk,
             "文件夹选择：现代（资源管理器风格）对话框 IFileDialog 可创建",
