@@ -11,7 +11,12 @@ public static class Scanners
     public static List<Entry> ScanCustom(AppConfig cfg)
     {
         var list = new List<Entry>();
-        foreach (var c in cfg.Custom)
+        // 快照遍历：UI 线程可能在扫描进行中修改 _cfg.Custom（拖放添加 / 添加文件夹 / 重命名 / 删除），
+        // List<T> 在 Add/RemoveAll 期间被 foreach 会抛 InvalidOperationException，
+        // 而扫描线程未处理异常会直接带崩整个进程（已改为快照 + 线程体 catch 兜底）。
+        // 顺带容忍反序列化出 null 的 Custom（用户手改 config.json 时）。
+        var items = cfg.Custom?.ToArray() ?? Array.Empty<CustomEntry>();
+        foreach (var c in items)
         {
             if (string.IsNullOrWhiteSpace(c.Path)) continue;
             string path = c.Path.Trim();

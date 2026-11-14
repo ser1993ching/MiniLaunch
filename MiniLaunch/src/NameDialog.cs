@@ -225,8 +225,19 @@ public sealed class NameDialog
 
             case Win32.WM_KEYDOWN:
             case Win32.WM_SYSKEYDOWN:
+                // 只拦截 Enter/Esc，其余（含 Alt+F4 关窗手势）必须落到 DefWindowProc，
+                // 否则 Alt+F4 被吞掉，窗口只能靠按钮/ESC 关闭。
                 if (((int)w & 0xFF) == Win32.VK_ESCAPE) { Close(); return IntPtr.Zero; }
                 if (((int)w & 0xFF) == Win32.VK_RETURN) { Commit(); return IntPtr.Zero; }
+                break;
+
+            case Win32.WM_COMMAND:
+                // 用户开始输入后清掉上一次的错误提示（否则「名称不能为空」会一直挂在界面上）
+                if (Win32.LOWORD(w) == EditId && Win32.HIWORD(w) == Win32.EN_CHANGE && _error.Length > 0)
+                {
+                    _error = "";
+                    Win32.InvalidateRect(h, IntPtr.Zero, false);
+                }
                 return IntPtr.Zero;
 
             // ===== 鼠标：悬停 / 按下 / 点击按钮 =====

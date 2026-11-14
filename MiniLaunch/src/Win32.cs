@@ -46,6 +46,7 @@ internal static class Win32
     public const int VK_RETURN = 0x0D;
     public const int VK_ESCAPE = 0x1B;
     public const int VK_SPACE = 0x20;
+    public const int VK_F4 = 0x73;
     public const int VK_UP = 0x26;
     public const int VK_DOWN = 0x28;
 

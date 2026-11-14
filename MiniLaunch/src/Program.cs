@@ -189,6 +189,8 @@ public static class Program
         var t = new Thread(() =>
         {
             try { DoScan(); }
+            // 兑底：扫描线程的任何异常都不能带崩进程（列出错误便于诊断）
+            catch (Exception ex) { NativeOut.WriteLine("扫描线程异常: " + ex.GetType().Name + ": " + ex.Message); }
             finally { Interlocked.Exchange(ref _scanning, 0); }
         })
         {

@@ -134,6 +134,11 @@ public static class SelfTest
             HotkeyParser.Format(cm, cv));
         Check(HotkeyParser.IsModifierKey(Win32.VK_CONTROL) && !HotkeyParser.IsModifierKey(0x41),
             "修饰键识别");
+        // 回归：Alt+F4 是标准关闭手势，录制窗不能把它当成组合键录进去（否则热键被静默改写）
+        Check(HotkeyDialog.IsCloseGesture(Win32.VK_F4, Win32.MOD_ALT), "热键录制：Alt+F4 判定为关闭手势");
+        Check(!HotkeyDialog.IsCloseGesture(Win32.VK_F4, Win32.MOD_CONTROL)
+              && !HotkeyDialog.IsCloseGesture(Win32.VK_SPACE, Win32.MOD_ALT),
+            "热键录制：非 Alt+F4 不误判为关闭手势");
 
         // ---- 2. 配置原子读写回环 ----
         var cfg = new AppConfig
@@ -151,6 +156,31 @@ public static class SelfTest
         ConfigStore.SaveUsage(usage);
         var usage2 = ConfigStore.LoadUsage();
         Check(usage2.Recs.Count == 1 && usage2.Recs["x"].Count == 3, "用量库保存/加载回环");
+
+        // ---- 2d. 落盘失败必须吞异常（杀软/索引器短暂锁住 json 时 UI 线程不能崩）----
+        try
+        {
+            using (var fs = new FileStream(Paths.UsagePath, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                ConfigStore.SaveUsage(new UsageDb());   // 目标文件被独占锁定：内部吞掉 IOException，不许抛
+            }
+            Check(true, "落盘失败吞异常（文件被锁定时不崩溃）");
+        }
+        catch (Exception ex)
+        {
+            Check(false, "落盘失败吞异常（文件被锁定时不崩溃）", ex.GetType().Name + ": " + ex.Message);
+        }
+        finally
+        {
+            try { File.Delete(Paths.UsagePath + ".tmp"); } catch { }
+            ConfigStore.SaveUsage(usage);   // 恢复测试数据
+        }
+
+        // ---- 2e. 用户手改 config.json 写成 "Custom": null 时不能 NRE ----
+        File.WriteAllText(Paths.ConfigPath, "{\"Hotkey\":\"Ctrl+Space\",\"Custom\":null}");
+        var cfgNull = ConfigStore.LoadConfig();
+        Check(cfgNull.Custom != null && cfgNull.Custom.Count == 0, "配置 Custom=null 时自动补空列表");
+        Check(Scanners.ScanCustom(cfgNull).Count == 0, "ScanCustom 对空 Custom 列表安全");
 
         // ---- 2b. 文件夹快捷入口：配置字段 / 旧配置兼容 / 扫描识别 ----
         string folderDir = Path.Combine(Path.GetTempPath(), "MiniLaunch-folder-" + Guid.NewGuid().ToString("N")[..6]);

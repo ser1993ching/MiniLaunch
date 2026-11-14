@@ -82,14 +82,26 @@ public static class ConfigStore
             if (File.Exists(Paths.ConfigPath))
             {
                 var c = JsonSerializer.Deserialize(File.ReadAllText(Paths.ConfigPath), JsonCtx.Default.AppConfig);
-                if (c != null) return c;
+                if (c != null)
+                {
+                    // 用户手改 config.json 写成 "Custom": null 时，反序列化会覆盖默认值：
+                    // 不补的话后续 cfg.Custom.ToArray()/Any() 全线 NRE
+                    c.Custom ??= new List<CustomEntry>();
+                    return c;
+                }
             }
         }
         catch { }
         return new AppConfig();
     }
 
-    public static void SaveConfig(AppConfig c) => SaveAtomic(Paths.ConfigPath, JsonSerializer.Serialize(c, JsonCtx.Default.AppConfig));
+    // 落盘失败静默吞掉：这些调用点都在 UI 线程（启动条目 / 拖放 / 重命名），
+    // 杀软/索引器短暂锁住 json 文件时抛 IOException 会在 WndProc 派发里变成未处理异常直接崩。
+    // 持久化本来就是尽力而为，丢了下次启动还有机会再写；SaveAtomic 本身仍保持原样（调用方各自包 try）。
+    public static void SaveConfig(AppConfig c)
+    {
+        try { SaveAtomic(Paths.ConfigPath, JsonSerializer.Serialize(c, JsonCtx.Default.AppConfig)); } catch { }
+    }
 
     public static UsageDb LoadUsage()
     {
@@ -105,7 +117,10 @@ public static class ConfigStore
         return new UsageDb();
     }
 
-    public static void SaveUsage(UsageDb u) => SaveAtomic(Paths.UsagePath, JsonSerializer.Serialize(u, JsonCtx.Default.UsageDb));
+    public static void SaveUsage(UsageDb u)
+    {
+        try { SaveAtomic(Paths.UsagePath, JsonSerializer.Serialize(u, JsonCtx.Default.UsageDb)); } catch { }
+    }
 
     public static void SaveAtomic(string path, string content)
     {

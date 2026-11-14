@@ -184,6 +184,10 @@ public sealed class HotkeyDialog
 
     void Close() => Win32.DestroyWindow(Hwnd);
 
+    /// <summary>是否为「标准关闭手势」而非要录制的组合：Alt+F4 必须关窗，不能被录成热键。</summary>
+    public static bool IsCloseGesture(int vk, uint mods) =>
+        vk == Win32.VK_F4 && (mods & Win32.MOD_ALT) != 0;
+
     // ================= 键盘录制 =================
     void OnKey(int vk)
     {
@@ -192,6 +196,8 @@ public sealed class HotkeyDialog
         if (vk == Win32.VK_RETURN) { if (_captured) Commit(); return; }
 
         uint mods = HotkeyParser.ModsFromKeyboard();
+        // Alt+F4 是标准关闭手势：吞掉它会静默把全局热键改成 Alt+F4 并写盘（回归：IsCloseGesture 断言）
+        if (IsCloseGesture(vk, mods)) { Close(); return; }
         if (mods == 0)
         {
             _error = "需要同时按住 Ctrl / Alt / Shift / Win 中至少一个";
@@ -245,7 +251,9 @@ public sealed class HotkeyDialog
             Win32.SetTextColor(mem, (int)Theme.TextSub);
             int hy = _pad + Scale(28);
             var rHint = new Win32.RECT { L = _pad, T = hy, R = cx - _pad, B = hy + Scale(20) };
-            Win32.DrawTextW(mem, _captured ? "按 Enter 使用当前组合" : "直接按下想要的组合键", -1, ref rHint, Theme.AlignLeft);
+            // _captured 只是按下到应用成功/失败之间的瞬态（按下即生效，不经 Enter），
+            // 绘制时不会处于 _captured 状态，文案固定为提示「按下即生效」。
+            Win32.DrawTextW(mem, "直接按下想要的组合键（按下即生效）", -1, ref rHint, Theme.AlignLeft);
 
             // 组合键：按键帽居中排列，帽间用“+”连接
             string[] caps = _captured

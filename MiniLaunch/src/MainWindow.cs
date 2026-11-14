@@ -108,6 +108,9 @@ public sealed class MainWindow
         }
         int x = waL + (waW - _w) / 2;
         int y = waT + (int)(waH * 0.30);
+        // 小屏（工作区高 < 窗口高）时钳到贴底：否则底部行/底栏掉出屏幕（如 1024×768）
+        int maxY = waT + Math.Max(0, waH - _h - Scale(8));
+        if (y > maxY) y = maxY;
         Win32.SetWindowPos(Hwnd, Win32.HWND_TOPMOST, x, y, 0, 0, Win32.SWP_NOSIZE);
 
         Win32.ShowWindow(Hwnd, Win32.SW_SHOW);

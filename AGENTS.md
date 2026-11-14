@@ -30,7 +30,7 @@ dotnet publish -c Release -r win-x64 --self-contained \
   -o "E:\code\_tmp_publish"
 cp /e/code/_tmp_publish/MiniLaunch.exe /e/code/_tmp_publish/MiniLaunch.pdb \
    "/e/code/启动器/publish/win-x64/"
-# 发布后必须核对：./MiniLaunch.exe --selftest 应显示 70 项通过（拿到旧产物会显示 60/45/38）
+# 发布后必须核对：./MiniLaunch.exe --selftest 应显示 81 项通过（拿到旧产物会显示 70/60/45/38）
 ```
 
 开发辅助（仅调试用，发布不包含）：
@@ -181,6 +181,9 @@ MiniLaunch/src/
    - **vtable 槽位顺序 ≠ 微软文档顺序**：文档里 IFileDialog 的方法列表是**按字母排的**，而 COM 调用按 vtable 位置。实际顺序（本机逐槽实测）：`3 Show / 4 SetFileTypes / 5 SetFileTypeIndex / 6 GetFileTypeIndex / 7 Advise / 8 Unadvise / 9 SetOptions / 10 GetOptions / 11 SetFolder / 12 SetDefaultFolder / 13 GetFolder / 14 GetCurrentSelection / 15 SetFileName / 16 GetFileName / 17 SetFileNameLabel / 18 SetDefaultExtension / 19 Close / 20 GetResult`。**按文档顺序写会把 `GetResult` 写到槽 19（Close）上 → 选完目录拿不到结果，表现为「选完又弹出旧的小树形窗」**。自检有「IFileDialog 槽位对齐（GetResult 槽位探测）」断言（未显示时槽 20 返回 `E_UNEXPECTED 0x8000FFFF`，错位则返回别的值）。
    - **`Marshal.GetObjectForIUnknown` 不会 AddRef**：RCW 直接接管那份引用，**多写一句 `Marshal.Release` 会把对象提前释放掉**——对话框虽然能弹出来，但一关闭对象就死了，`GetResult` 拿不到结果。同理 `GetResult` 交回来的 `IShellItem*` 是**我们**的引用，要自己 `Release`。
    - 附：CLSID 用 `DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7`（comdlg32.dll 的「File Open Dialog」）、IID 用 `d57c7288-d4ad-4768-be02-9d969532d960`（IID_IFileOpenDialog）；`FOS_PATHMUSTEXIST` 与 `FOS_PICKFOLDERS` 同时使用会被 shell 判为非法（`SetOptions` 返回 `E_INVALIDARG`），所以只留 `PICKFOLDERS|FORCEFILESYSTEM|FILEMUSTEXIST|NOCHANGEDIR`。
+31. **后台线程改共享 List 时 UI 线程可能同时在改它 → 崩进程**：扫描线程 `ScanCustom` 里 `foreach cfg.Custom`，UI 线程（拖放添加 / 添加文件夹 / 重命名 / 删除）会 `Add/RemoveAll` 同一列表，`List<T>` 枚举中变更会抛 `InvalidOperationException`，而后台线程未处理异常 = 整个进程崩溃。`ScanCustom` 已改为快照遍历（`cfg.Custom?.ToArray()`，同时容忍手改 config.json 出现的 `"Custom": null`，`LoadConfig` 会补空列表），扫描线程体另有 catch 兑底。任何后台线程的未处理异常都会崩，不要裸抛。
+32. **热键录制窗的 Alt+F4 是关闭手势，不是组合键**：录制是「按下即生效」，Alt+F4 会被当成组合录进去、全局热键被静默改写并落盘。用 `IsCloseGesture(vk, mods)` 过滤后再走录制。顺带：自绘对话框若把 WM_KEYDOWN/WM_SYSKEYDOWN 一律吞掉，Alt+F4 就关不了窗（NameDialog 只拦 Enter/Esc，其余必须落到 DefWindowProc）。
+33. **UI 线程落盘必须吞异常**：`SaveConfig/SaveUsage` 的调用点几乎都在 UI 线程（启动条目/拖放/退出），杀软/索引器短暂锁住 json 会抛 IOException，在 WndProc 派发里变成未处理异常直接崩。持久化本来就是尽力而为：`SaveConfig/SaveUsage` 内部 catch 空吞（`SaveAtomic` 保持原样，由调用方各自包 try）。自检有「文件被锁定不崩」断言。
 
 ## 运行环境兼容性
 
@@ -212,7 +215,7 @@ _footerY/_footerH   底部快捷键栏（38）
 ## 工作方式约定
 
 - 先读 `方案.md` / `详细计划.md` / `审查记录.md` 再动结构性代码；功能裁剪清单在 `方案.md` 第八节（插件/剪贴板/截图/同步等**明确不做**）。
-- 改动完成的标准：`dotnet build` 0 警告 0 错误 + `--selftest` 全绿（当前基线 70 项通过）。新增能力时同步加断言到 `SelfTest.cs`。
+- 改动完成的标准：`dotnet build` 0 警告 0 错误 + `--selftest` 全绿（当前基线 81 项通过）。新增能力时同步加断言到 `SelfTest.cs`。
 - 提交后会自动推送到 GitHub 和 Gitee（全局 git hook，见 `tools/install-autopush-hook.sh`）：
   每次 `git commit` 触发 `post-commit` → 逐个检查 **github.com / gitee.com** 的远端，
   先判断平台上**是否已创建对应仓库**（GitHub 走 `api.github.com`，Gitee 走 `gitee.com/api/v5`），

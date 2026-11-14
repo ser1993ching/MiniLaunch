@@ -172,6 +172,13 @@ public sealed class IconCache : IDisposable
                     if (icon == IntPtr.Zero) icon = FallbackIcon();
                 }
                 catch { }
+                // Dispose 可能已开始（Join 500ms 内没等到线程结束）：不再入队，
+                // 否则图标会在 Dispose 清空 _ready 之后才进来，没人销毁它
+                if (_stop)
+                {
+                    try { if (icon != IntPtr.Zero) Win32.DestroyIcon(icon); } catch { }
+                    break;
+                }
                 lock (_lock) { _ready.Enqueue((KeyOf(e), icon)); }
                 try { OnIconReady?.Invoke(); } catch { }
             }
