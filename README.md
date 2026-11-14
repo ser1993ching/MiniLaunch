@@ -168,10 +168,10 @@ Opened from the tray menu; the new combo applies immediately, `Esc` cancels.
 
 程序本体挂在**Releases 页面**上（不在仓库正文里，仓库只放源码）：
 
-| 平台 | Releases 页面 | 附件 |
-| --- | --- | --- |
-| GitHub | [ser1993ching/MiniLaunch/releases](https://github.com/ser1993ching/MiniLaunch/releases) | `MiniLaunch.exe`（单文件免安装，双击即用） |
-| Gitee | [yangwei01/mini-launch/releases](https://gitee.com/yangwei01/mini-launch/releases) | `MiniLaunch.exe` |
+| 平台 | Releases 页面 | 附件 | 国内速度 |
+| --- | --- | --- | --- |
+| GitHub | [ser1993ching/MiniLaunch/releases](https://github.com/ser1993ching/MiniLaunch/releases) | `MiniLaunch.exe`（单文件免安装，双击即用）<br>`MiniLaunch-<版本>-win-x64.zip` | 慢（Release 附件被限速 ~12KB/s） |
+| Gitee | [yangwei01/mini-launch/releases](https://gitee.com/yangwei01/mini-launch/releases) | 同上两个附件 | **快（实测 12MB 约 6 秒），国内首选** |
 
 | 版本 | 说明 |
 | --- | --- |
