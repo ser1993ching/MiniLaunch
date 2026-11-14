@@ -17,7 +17,7 @@ Native Win32 self-drawn UI · Zero NuGet packages · Zero reflection · **0% CPU
   <img src="https://img.shields.io/badge/memory-15.2MB-brightgreen" alt="15.2 MB private memory" />
   <img src="https://img.shields.io/badge/NuGet_deps-0-brightgreen" alt="Zero NuGet dependencies" />
   <img src="https://img.shields.io/badge/reflection-none-brightgreen" alt="Zero reflection" />
-  <img src="https://img.shields.io/badge/exe-11.7MB-blue" alt="11.7 MB single file" />
+  <img src="https://img.shields.io/badge/exe-11.8MB-blue" alt="11.8 MB single file" />
   <img src="https://img.shields.io/badge/UI-pure_Win32_P%2FInvoke-0078D4" alt="Pure Win32 P/Invoke" />
   <img src="https://img.shields.io/badge/platform-Windows_10%2B-0078D4" alt="Windows 10+" />
   <img src="https://img.shields.io/badge/language-C%23-239120" alt="C#" />
@@ -51,7 +51,7 @@ The table below shows **measured numbers** (Windows 10/11, Release self-containe
 | 工作集（含共享运行时页） | Working set (incl. shared runtime pages) | 50.6 MB，10 秒内**零增长** | 50.6 MB, **zero growth** over 10 s |
 | 线程数 | Threads | 15 | 15 |
 | 句柄数 | Handles | 423 | 423 |
-| 可执行文件体积 | Executable size | **11.7 MB**（自包含 + 裁剪，单文件） | **11.7 MB** (self-contained + trimmed, single file) |
+| 可执行文件体积 | Executable size | **11.8 MB**（自包含 + 裁剪，单文件） | **11.8 MB** (self-contained + trimmed, single file) |
 | 无 UI 纯逻辑进程 | Headless process (self-test) | **1.3 MB** 工作集 | **1.3 MB** working set |
 
 #### 是怎么做到的 / How it stays small
@@ -161,6 +161,26 @@ Opened from the tray menu; the new combo applies immediately, `Esc` cancels.
 <p align="center">
   <img src="docs/screenshots/hotkey-dialog.png" width="360" alt="Hotkey dialog" />
 </p>
+
+---
+
+## 📥 下载 / Download
+
+程序本体挂在**Releases 页面**上（不在仓库正文里，仓库只放源码）：
+
+| 平台 | Releases 页面 | 附件 |
+| --- | --- | --- |
+| GitHub | [ser1993ching/MiniLaunch/releases](https://github.com/ser1993ching/MiniLaunch/releases) | `MiniLaunch.exe`（单文件免安装，双击即用） |
+| Gitee | [yangwei01/mini-launch/releases](https://gitee.com/yangwei01/mini-launch/releases) | `MiniLaunch.exe` |
+
+| 版本 | 说明 |
+| --- | --- |
+| **1.1（当前）** | 新增文件夹快速启动等；自检 70 项 |
+| 1.0（历史版本） | 首个公开版本；自检 60 项 —— **旧版本不会被删除**，始终可在 Releases 页面翻到 |
+
+> 每次推送版本标签（`git push origin 1.1`）都会由 GitHub Actions 自动构建、自检并把
+> `MiniLaunch.exe` 挂到该标签的 Release 上，无需手工上传。
+> Windows 运行时会弹出「已保护你的电脑」蓝色窗口 —— 点 **更多信息 → 仍要运行** 即可。
 
 ---
 
@@ -285,6 +305,18 @@ A：确认没有开启 `PublishReadyToRun`，并确认用的是**最新**产物�
 
 ---
 
+## 🗂 版本记录 / Releases
+
+| 版本 | 发布日期 | 内容 |
+| --- | --- | --- |
+| **1.1** | 2026-11-14 | 新增**文件夹快速启动**：托盘「添加文件夹…」选目录并起名，回车直接进目录；文件夹条目带「文件夹」标记、可重命名；空查询时常用文件夹置顶。同时修复 shell 选择对话框在 MTA 线程上不显示的问题。自检 70 项。 |
+| **1.0** | 2026-11-07 | 首个公开版本：热键呼出 / 模糊搜索 / 四路来源聚合 / 使用频率排序 / 托盘菜单 / 开机自启 / 单文件 11.8MB。自检 60 项。 |
+
+> 旧版本产物不会被删除：Releases 页面保留每个标签的 exe；本地 `publish\win-x64\` 是当前版本，历史版本归档在 `publish\win-x64-<版本号>\`。
+> Older builds are never deleted: every tag keeps its exe on the Releases page; locally `publish\win-x64\` holds the current build and older ones are archived under `publish\win-x64-<version>\`.
+
+---
+
 ## 📚 设计文档 / Design docs
 
 | 文档 | 内容 |
@@ -315,7 +347,7 @@ Pure Win32 self-drawn UI · Zero NuGet packages · Zero reflection · **0% CPU w
   <img src="https://img.shields.io/badge/idle_CPU-0.000%25-brightgreen" alt="0.000% idle CPU" />
   <img src="https://img.shields.io/badge/memory-15.2MB-brightgreen" alt="15.2 MB private memory" />
   <img src="https://img.shields.io/badge/NuGet_deps-0-brightgreen" alt="Zero NuGet dependencies" />
-  <img src="https://img.shields.io/badge/exe-11.7MB-blue" alt="11.7 MB single file" />
+  <img src="https://img.shields.io/badge/exe-11.8MB-blue" alt="11.8 MB single file" />
 </p>
 
 </div>
@@ -361,7 +393,7 @@ Press `Ctrl+Space`, type a few characters, hit `Enter`. Everything else is delib
 | **Private memory (resident)** | **15.2 MB** |
 | Working set (incl. shared runtime pages) | 50.6 MB — **zero growth** over 10 s |
 | Threads / Handles | 15 / 423 |
-| Executable size | **11.7 MB** (self-contained + trimmed, single file) |
+| Executable size | **11.8 MB** (self-contained + trimmed, single file) |
 | Headless process (self-test) | **1.3 MB** working set |
 
 > Measured on Windows 10/11 with the Release self-contained trimmed build.
