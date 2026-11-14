@@ -56,6 +56,37 @@ python tools/rows.py C:\temp\shot.png
 发布时允许的唯一已知告警：`IL2008 System.Diagnostics.FileVersionInfo ... System.SR`（无害）。若新增裁剪告警，必须逐条核对是否因引入反射。
 NativeAOT（`publish-aot.cmd`）**尚未创建**，需先装 VC 工具链。
 
+## 发版流程（Releases 页面放 exe，仓库正文不放二进制）
+
+仓库只放源码；**程序本体挂在 Releases 页**（GitHub + Gitee 各一份），历史版本的 Release 永远不删。
+
+```bash
+# 0) 版本号：打标签（标签即版本）
+git tag -a 1.1 -m "MiniLaunch 1.1：..." && git push origin 1.1 && git push gitee 1.1
+
+# 1) GitHub：推标签后由 Actions 自动发版
+#    .github/workflows/release.yml：publish 单文件 → --selftest 全绿才发 → 挂 exe/zip/VERSION.txt
+#    手动补传本地构建产物（gh CLI 已登录）：
+GH="/c/Users/72641/AppData/Local/Programs/gh-cli/bin/gh.exe"
+"$GH" release upload 1.1 publish/win-x64/MiniLaunch.exe --repo ser1993ching/MiniLaunch --clobber
+
+# 2) Gitee：需要私人令牌（https://gitee.com/personal_access_tokens，勾选 projects 权限）
+GITEE_TOKEN=<令牌> python tools/gitee_release.py 1.1 "MiniLaunch 1.1" \
+    publish/win-x64/MiniLaunch.exe publish/win-x64/MiniLaunch.zip publish/win-x64/VERSION.txt
+```
+
+**校验上传完整性不要下载全量**（GitHub Release 附件走 release-assets.githubusercontent.com，
+国内被限速到 ~12KB/s，12MB 要十几分钟）：用 API 的 sha256 对比本地文件即可。
+
+```bash
+"$GH" api repos/ser1993ching/MiniLaunch/releases/tags/1.1 --jq '.assets[] | "\(.name) \(.digest)"'
+sha256sum publish/win-x64/MiniLaunch.exe
+```
+
+**CI 坑**：MiniLaunch.exe 是 WinExe（GUI 子系统），PowerShell 直接调用**不会等待**进程结束，
+`$LASTEXITCODE` 是 $null → 会被误判成失败。必须用
+`Start-Process -Wait -PassThru` 取真实退出码（见 workflow 的 Self-test 步骤）。
+
 ## 应用图标
 
 - 图标源文件 `MiniLaunch/app.ico`（10 个尺寸：16~256，≤128 为 32 位 BMP，256 为 PNG），
