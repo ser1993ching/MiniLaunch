@@ -3,12 +3,18 @@ using System.Text;
 
 namespace MiniLaunch;
 
-// 名称输入小窗：给「文件夹快捷入口」起个显示名（Enter 确认 / Esc 取消）
+// 名称输入小窗：给「文件夹快捷入口」起个显示名（Enter 确认 / Esc 取消，也可点按钮）
 // 自绘窗口 + 原生 EDIT 子控件（IME 友好），与 HotkeyDialog 同一套风格。
+// 底部两个按钮（取消 / 确定）是**自绘**的：原生 BUTTON 控件在暗色主题下是灰色的方块，
+// 与整体风格不搭；自绘还能自己控制圆角、悬停与按下反馈。
 public sealed class NameDialog
 {
     const string ClassName = "MiniLaunchNameDlg";
     const int EditId = 1;
+
+    /// <summary>按钮索引。</summary>
+    public const int BtnCancel = 0;
+    public const int BtnOk = 1;
 
     static readonly Win32.WndProcDelegate s_wndProc = WndProcStatic;
     static readonly Win32.SubclassProcDelegate s_editProc = EditProcStatic;
@@ -26,8 +32,11 @@ public sealed class NameDialog
 
     float _scale = 1f;
     int _w, _h, _pad, _editH;
-    IntPtr _fontTitle, _fontHint, _fontEdit, _fontSmall, _brushEditBg, _brushBorder;
+    IntPtr _fontTitle, _fontHint, _fontEdit, _fontSmall, _fontBtn, _brushEditBg, _brushBorder;
     string _error = "";
+
+    int _hover = -1;      // 鼠标悬停的按钮
+    int _pressed = -1;    // 按下未松开的按钮
 
     NameDialog(string title, string hint, Func<string, bool> onOk)
     {
@@ -80,12 +89,41 @@ public sealed class NameDialog
     {
         _scale = scale;
         _w = Scale(460);
-        _h = Scale(206);
+        _h = Scale(214);
         _pad = Scale(22);
         _editH = Scale(30);
     }
 
     int Scale(int v) => (int)Math.Round(v * _scale);
+
+    /// <summary>
+    /// 底部按钮布局（客户端坐标）。返回 [x, y, w, h] × 2：第 0 个是「取消」，第 1 个是「确定」。
+    /// 抽成静态方法是为了让自检能在无头环境里验证命中区（点击确认全靠这套坐标）。
+    /// </summary>
+    public static int[] ButtonLayout(int clientW, int clientH, float scale)
+    {
+        int pad = (int)Math.Round(22 * scale);
+        int btnH = (int)Math.Round(30 * scale);
+        int okW = (int)Math.Round(88 * scale);
+        int cancelW = (int)Math.Round(76 * scale);
+        int gap = (int)Math.Round(10 * scale);
+        int okX = clientW - pad - okW;
+        int cancelX = okX - gap - cancelW;
+        int y = clientH - pad - btnH;
+        return new[] { cancelX, y, cancelW, btnH, okX, y, okW, btnH };
+    }
+
+    /// <summary>命中测试：点在「取消/确定」按钮上返回按钮索引，否则返回 -1。</summary>
+    public static int HitButton(int clientW, int clientH, float scale, int mx, int my)
+    {
+        var r = ButtonLayout(clientW, clientH, scale);
+        for (int i = 0; i < 2; i++)
+        {
+            int x = r[i * 4], y = r[i * 4 + 1], w = r[i * 4 + 2], h = r[i * 4 + 3];
+            if (mx >= x && mx < x + w && my >= y && my < y + h) return i;
+        }
+        return -1;
+    }
 
     void CreateFonts()
     {
@@ -93,6 +131,7 @@ public sealed class NameDialog
         _fontHint = MakeFont(12, Win32.FW_NORMAL);
         _fontEdit = MakeFont(15, Win32.FW_NORMAL);
         _fontSmall = MakeFont(11, Win32.FW_NORMAL);
+        _fontBtn = MakeFont(13, Win32.FW_NORMAL);
         _brushEditBg = Win32.CreateSolidBrush(Theme.Surface);
         _brushBorder = Win32.CreateSolidBrush(Theme.SurfaceBorder);
     }
@@ -104,9 +143,9 @@ public sealed class NameDialog
 
     void DestroyRes()
     {
-        foreach (var f in new[] { _fontTitle, _fontHint, _fontEdit, _fontSmall })
+        foreach (var f in new[] { _fontTitle, _fontHint, _fontEdit, _fontSmall, _fontBtn })
             if (f != IntPtr.Zero) Win32.DeleteObject(f);
-        _fontTitle = _fontHint = _fontEdit = _fontSmall = IntPtr.Zero;
+        _fontTitle = _fontHint = _fontEdit = _fontSmall = _fontBtn = IntPtr.Zero;
         if (_brushEditBg != IntPtr.Zero) { Win32.DeleteObject(_brushEditBg); _brushEditBg = IntPtr.Zero; }
         if (_brushBorder != IntPtr.Zero) { Win32.DeleteObject(_brushBorder); _brushBorder = IntPtr.Zero; }
     }
@@ -189,6 +228,73 @@ public sealed class NameDialog
                 if (((int)w & 0xFF) == Win32.VK_ESCAPE) { Close(); return IntPtr.Zero; }
                 if (((int)w & 0xFF) == Win32.VK_RETURN) { Commit(); return IntPtr.Zero; }
                 return IntPtr.Zero;
+
+            // ===== 鼠标：悬停 / 按下 / 点击按钮 =====
+            case Win32.WM_MOUSEMOVE:
+            {
+                int x = Win32.LOWORD(l), y = Win32.HIWORD(l);
+                int hit = HitButton(_w, _h, _scale, x, y);
+                if (hit != _hover)
+                {
+                    _hover = hit;
+                    Win32.InvalidateRect(h, IntPtr.Zero, false);
+                }
+                // 追踪离开事件：鼠标移出窗口时清掉悬停态
+                var tme = new Win32.TRACKMOUSEEVENT
+                {
+                    cbSize = Marshal.SizeOf<Win32.TRACKMOUSEEVENT>(),
+                    dwFlags = Win32.TME_LEAVE,
+                    hwndTrack = h,
+                    dwHoverTime = 0,
+                };
+                Win32.TrackMouseEvent(ref tme);
+                return IntPtr.Zero;
+            }
+
+            case Win32.WM_MOUSELEAVE:
+                if (_hover != -1 || _pressed != -1)
+                {
+                    _hover = -1;
+                    _pressed = -1;
+                    Win32.InvalidateRect(h, IntPtr.Zero, false);
+                }
+                return IntPtr.Zero;
+
+            case Win32.WM_LBUTTONDOWN:
+            {
+                int x = Win32.LOWORD(l), y = Win32.HIWORD(l);
+                int hit = HitButton(_w, _h, _scale, x, y);
+                if (hit >= 0)
+                {
+                    _pressed = hit;
+                    _hover = hit;
+                    Win32.InvalidateRect(h, IntPtr.Zero, false);
+                }
+                return IntPtr.Zero;
+            }
+
+            case Win32.WM_LBUTTONUP:
+            {
+                int x = Win32.LOWORD(l), y = Win32.HIWORD(l);
+                int hit = HitButton(_w, _h, _scale, x, y);
+                int pressed = _pressed;
+                _pressed = -1;
+                Win32.InvalidateRect(h, IntPtr.Zero, false);
+                if (hit >= 0 && hit == pressed)
+                {
+                    if (hit == BtnOk) Commit(); else Close();
+                }
+                return IntPtr.Zero;
+            }
+
+            case Win32.WM_SETCURSOR:
+                // 悬停在按钮上时显示手型光标
+                if (_hover >= 0 && (int)Win32.LOWORD(l) == Win32.HTCLIENT)
+                {
+                    Win32.SetCursor(Win32.LoadCursorW(IntPtr.Zero, Win32.IDC_HAND));
+                    return (IntPtr)1;
+                }
+                break;
 
             case Win32.WM_DESTROY:
                 DestroyRes();
@@ -287,12 +393,17 @@ public sealed class NameDialog
                 Win32.DrawTextW(mem, _error, -1, ref rErr, Theme.AlignLeft);
             }
 
-            // 底部提示
+            // 按钮
+            var lay = ButtonLayout(cx, cy, _scale);
+            DrawButton(mem, lay, BtnCancel, "取消", false);
+            DrawButton(mem, lay, BtnOk, "确定", true);
+
+            // 底部提示（左侧）
             Win32.SelectObject(mem, _fontSmall);
             Win32.SetTextColor(mem, (int)Theme.TextDim);
-            int by = cy - _pad - Scale(16);
-            var rBot = new Win32.RECT { L = _pad, T = by, R = cx - _pad, B = by + Scale(16) };
-            Win32.DrawTextW(mem, "Enter 确认  ·  Esc 取消", -1, ref rBot, Theme.AlignCenter);
+            int by = lay[1];
+            var rBot = new Win32.RECT { L = _pad, T = by, R = lay[0] - Scale(10), B = by + lay[3] };
+            Win32.DrawTextW(mem, "Enter 确认  ·  Esc 取消", -1, ref rBot, Theme.AlignLeft);
 
             Win32.BitBlt(hdc, 0, 0, cx, cy, mem, 0, 0, Win32.SRCCOPY);
             Win32.SelectObject(mem, oldBmp);
@@ -303,6 +414,40 @@ public sealed class NameDialog
         {
             Win32.EndPaint(Hwnd, ref ps);
         }
+    }
+
+    /// <summary>画一个自绘按钮（主按钮用渐变，次按钮用描边）。</summary>
+    void DrawButton(IntPtr hdc, int[] lay, int index, string text, bool primary)
+    {
+        int x = lay[index * 4], y = lay[index * 4 + 1], w = lay[index * 4 + 2], h = lay[index * 4 + 3];
+        bool hover = _hover == index;
+        bool pressed = _pressed == index;
+        int dy = pressed ? 1 : 0;
+
+        var rc = new Win32.RECT { L = x, T = y + dy, R = x + w, B = y + h + dy };
+        if (primary)
+        {
+            uint top = pressed ? Theme.SelBottom : (hover ? Win32.Rgb(0x6E, 0x8C, 0xFF) : Theme.SelTop);
+            uint bot = pressed ? Win32.Rgb(0x2F, 0x4A, 0xB8) : (hover ? Win32.Rgb(0x4E, 0x6B, 0xE8) : Theme.SelBottom);
+            Theme.FillRoundGradient(hdc, rc, Scale(8), top, bot);
+        }
+        else
+        {
+            uint bg = pressed ? Win32.Rgb(0x22, 0x24, 0x2C) : (hover ? Theme.Hover : Theme.Surface);
+            // 圆角描边：先画外扩一圈的边框色，再画内圈底色 → 得到 1px 圆角边框
+            IntPtr brBorder = Win32.CreateSolidBrush(Theme.SurfaceBorder);
+            var outer = new Win32.RECT { L = rc.L - 1, T = rc.T - 1, R = rc.R + 1, B = rc.B + 1 };
+            Theme.FillRoundSolid(hdc, outer, Scale(8) + 1, brBorder);
+            Win32.DeleteObject(brBorder);
+            IntPtr brBg = Win32.CreateSolidBrush(bg);
+            Theme.FillRoundSolid(hdc, rc, Scale(8), brBg);
+            Win32.DeleteObject(brBg);
+        }
+
+        Win32.SelectObject(hdc, _fontBtn);
+        Win32.SetTextColor(hdc, (int)(primary ? Theme.TextOnSel : Theme.TextMain));
+        var tr = new Win32.RECT { L = rc.L, T = rc.T, R = rc.R, B = rc.B };
+        Win32.DrawTextW(hdc, text, -1, ref tr, Theme.AlignCenter);
     }
 
     // ================= EDIT 子类化 =================

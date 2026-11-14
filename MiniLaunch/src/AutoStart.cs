@@ -16,7 +16,6 @@ public static class AutoStart
 {
     public const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     public const string ValueName = "MiniLaunch";
-    public const string TaskName = "MiniLaunch";
 
     /// <summary>稳定安装目录：%LOCALAPPDATA%\MiniLaunch（自启指向这里，删构建目录也不会失效）。</summary>
     public static string InstallDir =>
@@ -237,59 +236,4 @@ public static class AutoStart
             return (false, ex.Message);
         }
     }
-
-    // ================= 任务计划程序（可选的另一种自启方式） =================
-
-    /// <summary>执行 schtasks 并返回退出码（0 = 成功）。只取退出码，不读输出，避免代码页解码问题。</summary>
-    static int RunSchtasks(string[] args, int timeoutMs)
-    {
-        try
-        {
-            var psi = new System.Diagnostics.ProcessStartInfo("schtasks.exe")
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            };
-            foreach (string a in args) psi.ArgumentList.Add(a);
-            using var p = new System.Diagnostics.Process { StartInfo = psi };
-            p.Start();
-            // 两条管道必须并行读（坑 #18 同款）：顺序 ReadToEnd 在 stderr 写满时死锁，
-            // 且同步读会让 WaitForExit 超时失效。输出内容不需要，只要退出码。
-            _ = p.StandardOutput.ReadToEndAsync();
-            _ = p.StandardError.ReadToEndAsync();
-            if (!p.WaitForExit(timeoutMs))
-            {
-                try { p.Kill(); } catch { }
-                return -1;
-            }
-            return p.ExitCode;
-        }
-        catch { return -1; }
-    }
-
-    /// <summary>是否已注册任务计划（用于排查「安全软件拦了 Run 项」的场景）。</summary>
-    public static bool IsTaskRegistered() =>
-        RunSchtasks(new[] { "/Query", "/TN", TaskName }, 8000) == 0;
-
-    /// <summary>
-    /// 注册「登录即启动」的任务计划（不需要管理员）。
-    /// 任务计划走的是任务调度器，Run 项被安全软件拦截时可以改用它。
-    /// 注意：真正的「系统启动即运行（未登录）」需要管理员权限创建 ONSTART 触发器。
-    /// </summary>
-    public static bool RegisterLogonTask(string exePath)
-    {
-        if (string.IsNullOrEmpty(exePath) || !File.Exists(exePath)) return false;
-        return RunSchtasks(new[]
-        {
-            "/Create", "/TN", TaskName,
-            "/TR", Quote(exePath),
-            "/SC", "ONLOGON", "/F",
-        }, 10000) == 0;
-    }
-
-    /// <summary>注销任务计划。</summary>
-    public static bool UnregisterTask() =>
-        RunSchtasks(new[] { "/Delete", "/TN", TaskName, "/F" }, 8000) == 0;
 }

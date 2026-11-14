@@ -118,11 +118,11 @@ MiniLaunch/src/
   Launcher.cs    ShellExecuteEx 封装（runas / 工作目录 / explorer /select）
   Theme.cs       配色表 + GDI 绘制工具（竖向渐变 / 圆角填充 / 按键帽 / 放大镜 / DWM 圆角）
   MainWindow.cs  无边框 WS_POPUP + 原生 EDIT 子类化 + 自绘双缓冲列表 + 拖放 + DPI + 右键菜单 + 失焦隐藏
-  AutoStart.cs   开机自启：HKCU Run 项读写（写入后回读校验）+ 启动自愈 + 安装到本地 + 任务计划
+  AutoStart.cs   开机自启：HKCU Run 项读写（写入后回读校验）+ 启动自愈 + 安装到本地
   HotkeyDialog.cs 热键录制小窗（按下即生效，Esc 取消）
-  Tray.cs        托盘菜单（设置热键 / 添加程序 / 添加文件夹 / 重新扫描 / 开机自启 / 开机自启诊断 / 安装到本地 / 注册登录自启任务 / 开机自启 / 退出）
-  FolderPicker.cs 文件夹选择对话框（SHBrowseForFolder，必须在 STA 线程执行，见坑 #28）
-  NameDialog.cs  名称输入小窗（给文件夹快捷入口起名 / 重命名，Enter 确认 · Esc 取消）
+  Tray.cs        托盘菜单（显示主窗口 / 设置热键 / 添加程序 / 添加文件夹 / 重新扫描 / 开机自启 / 打开配置文件 / 退出）
+  FolderPicker.cs 文件夹选择对话框（现代「资源管理器风格」IFileDialog + FOS_PICKFOLDERS，必须在 STA 线程执行，见坑 #28/#30）
+  NameDialog.cs  名称输入小窗（给文件夹快捷入口起名 / 重命名；Enter 确认 · Esc 取消 · 也可点自绘的「取消 / 确定」按钮）
   NativeOut.cs   管道 stdout 输出（WinExe 无控制台）
   SelfTest.cs    --selftest 全部断言
 方案.md / 详细计划.md / 审查记录.md   设计依据与已知问题处置（改架构前先读）
@@ -162,10 +162,10 @@ MiniLaunch/src/
 15. **W 版 API 必须写 `CharSet = CharSet.Unicode`**：漏了它，`StringBuilder` 会按 ANSI/GBK 解码 UTF-16 字节流，`"docker"` 会读成 `"d"`（表现为「只能按首字母搜索」）。新增任何带 `string`/`StringBuilder` 的 `DllImport` 都要检查这一点。
 16. **单行 `EDIT` 的文字贴客户区顶部**：`EM_SETRECT(NP)` 只对多行控件生效，要垂直居中只能把控件本身按行高摆好（见 `LayoutEdit`）。
 17. **高版本系统 API 必须降级**：`SetProcessDpiAwarenessContext`（Win10 1703+）、`GetDpiForWindow`（Win10 1607+）在老系统上直接 P/Invoke 会抛 `EntryPointNotFoundException` **直接崩**。统一走 `Dpi.EnableAwareness()`（降级到 `SetProcessDPIAware`）与 `Dpi.ForWindow()`（降级到 `GetDeviceCaps(LOGPIXELSX)`）；`DwmSetWindowAttribute`（Win8+）已在 `Theme.ApplyModernFrame` 的 try/catch 里。
-18. **子进程管道必须显式指定编码**：`Process.StandardOutput` 默认按「**父进程控制台代码页**」解码（本机 GBK），而 powershell 按 `[Console]::OutputEncoding=UTF8` 输出的是 UTF-8 → 中文乱码；更糟的是 GBK 双字节解码会把 JSON 里的 `"` 吞掉，抛 `JsonException: FoundInvalidCharacter`，**UWP 列表全丢且缓存永远写不出来**（于是每次启动都白跑一次 1.3s 的 powershell）。必须在 `ProcessStartInfo` 里设 `StandardOutputEncoding = Encoding.UTF8`（同理 `StandardErrorEncoding`）。**两条管道都要用 `ReadToEndAsync` 并行读**（只并行 stderr 不够：同步读 stdout 会先无限阻塞，让后面的 `WaitForExit(超时)` 永远轮不到，powershell 挂住时扫描线程永久卡死）；超时判断必须放在同步读之前。schtasks 封装（`AutoStart.RunSchtasks`）同样适用。
+18. **子进程管道必须显式指定编码**：`Process.StandardOutput` 默认按「**父进程控制台代码页**」解码（本机 GBK），而 powershell 按 `[Console]::OutputEncoding=UTF8` 输出的是 UTF-8 → 中文乱码；更糟的是 GBK 双字节解码会把 JSON 里的 `"` 吞掉，抛 `JsonException: FoundInvalidCharacter`，**UWP 列表全丢且缓存永远写不出来**（于是每次启动都白跑一次 1.3s 的 powershell）。必须在 `ProcessStartInfo` 里设 `StandardOutputEncoding = Encoding.UTF8`（同理 `StandardErrorEncoding`）。**两条管道都要用 `ReadToEndAsync` 并行读**（只并行 stderr 不够：同步读 stdout 会先无限阻塞，让后面的 `WaitForExit(超时)` 永远轮不到，powershell 挂住时扫描线程永久卡死）；超时判断必须放在同步读之前。
 19. **扫描分两阶段**：开始菜单/注册表约 30ms，先发布让窗口有内容；UWP 需拉 powershell（首次 ~1.3s），等窗口首次显示（`Program.NotifyFirstShown`）后再做——开机自启常驻时完全不占启动资源。`uwp-cache.json` 里要有一条**空名哨兵**记录扫描时间戳，否则 0 条时会被当成“无缓存”而每次重跑 powershell。
 20. **开机自启必须“写入后回读校验”**：`Registry.SetValue` 被组策略/安全软件拦截时**不抛异常**，只是不生效——所以写入后必须回读比对，不一致就回滚 UI 状态并提示。菜单勾选状态一律以**注册表**为准（真相源），不是 config.json。
-21. **自启目标要用稳定路径**：`Environment.ProcessPath` 拿到的是“当前正在跑的那个 exe”，在 `bin\Debug` 下就是构建目录，下次 `git clean` 就失效了。托盘菜单「安装到本地并设为开机自启」会把程序复制到 `%LOCALAPPDATA%\MiniLaunch` 再指向它。
+21. **自启目标要用稳定路径**：`Environment.ProcessPath` 拿到的是“当前正在跑的那个 exe”，在 `bin\Debug` 下就是构建目录，下次 `git clean` 就失效了。开关「开机自启」时若当前 exe 在构建目录，程序会**自动**复制到 `%LOCALAPPDATA%\MiniLaunch` 再指向它（不需要单独的菜单项）。
 22. **启动时要自愈**：注册表项指向的文件没了（构建目录被清理/搬走/换机）→ 每次启动检查并改写回当前 exe；用户关闭过自启 → 清理注册表残留。`AutoStart.Heal` 的第三个参数是「配置文件**存在**」，而 `firstRun` 是「配置文件**不存在**」，语义相反，传参必须取反。
 23. **自启常驻时窗口可能永远不显示**：`FirstShown` 只在 `MainWindow.ShowWin()` 里 set，所以 `DoScan` 里不能无限 `Wait()`——否则 UWP 扫描永远不执行，UWP 应用永远搜不到。现在改成「首显 或 3 秒超时」先到者触发。
 24. **高 DPI 首显必须 resize 窗口**：窗口按 96 DPI 尺寸创建，`WM_CREATE` 里重算度量后必须 `SetWindowPos` 撑到新 `_w×_h`（主窗口与热键录制窗都要）——`WM_DPICHANGED` 只在 DPI *变化* 时触发，主屏缩放 ≠100% 时首显不会补，底部行/底栏会被裁剪。自检有「主窗口客户区与 DPI 布局一致」断言。
@@ -173,10 +173,14 @@ MiniLaunch/src/
 26. **空查询排序不能把 Count 拼进 Ticks**：`DateTime.Ticks≈6.4e17`，`Count*1e10` 的权重会被完全淹没，退化成「最近使用」排序。必须先比 Count 再比 LastTicks（拼一个 long 会溢出）。自检有「空查询频率优先于最近使用」回归断言。
 27. **按键会「响一声」：EDIT 的 `WM_CHAR` 控制字符必须一起吞掉**：`TranslateMessage` 会把 Esc/Enter/Tab 的 `WM_KEYDOWN` 再派生一条 `WM_CHAR`（wParam 就是字符码：27/13/9）投给焦点窗口（搜索框 EDIT）。只拦 `WM_KEYDOWN` 时这条 `WM_CHAR` 会透传给 `DefSubclassProc`，EDIT 对「它自己不用」的控制字符走默认路径 `MessageBeep` → 每按一次 Esc 退出 / Enter 启动 / Tab 都「叮」一声（系统「默认提示音」）。修法见 `MainWindow.IsSilentKeyChar`：27/13/10/9 直接 `return 0`。
    **反向注意**：`0x01(^A)`、`0x03(^C)`、`0x16(^V)`、`0x18(^X)`、`0x1A(^Z)`、`0x08(退格)` 是 EDIT 真正执行的编辑命令，吞了会破坏编辑功能；其中 `^X` 只有**无选区可剪**时才响（属于 EDIT 报「无效操作」），所以按 `EM_GETSEL` 判断选区为空才吞。
-   **其他发声点**（一处不改就会漏）：托盘气泡 `Shell_NotifyIcon` 用 `NIIF_INFO` 会播系统「通知」音 → 加 `NIIF_NOSOUND`；`MessageBoxW` 带 `MB_ICON*` 会播对应系统音 → 诊断框只留 `MB_OK`。
+   **其他发声点**（一处不改就会漏）：托盘气泡 `Shell_NotifyIcon` 用 `NIIF_INFO` 会播系统「通知」音 → 加 `NIIF_NOSOUND`；`MessageBoxW` 带 `MB_ICON*` 会播对应系统音 → 本项目所有对话框一律只留 `MB_OK`。
    定位手段（可复用）：WASAPI `IAudioMeterInformation.GetPeakValue` 轮询默认渲染设备峰值 + `keybd_event` 注入按键，量出修前 0.6604（51~65 采样）/ 修后 0.0000。注意本机 IME（`OimeTsfNotifyWindow`）会吃掉注入的字母键，验证「打字/剪切」类功能要用 `WM_SETTEXT`+`EM_SETSEL`+剪贴板核对，别依赖注入字母。
-28. **shell 对话框必须在 STA 线程上调用**：`SHBrowseForFolderW`（选文件夹）在 **MTA** 线程上调用时，对话框窗口**会被创建但永远不显示**（`WS_VISIBLE` 没置上，句柄存在却看不见），且不报错。.NET 主线程默认是 MTA（`CoInitializeEx(COINIT_APARTMENTTHREADED)` 会返回 `RPC_E_CHANGED_MODE`），所以本项目的「添加文件夹…」必须放到自建的 STA 线程执行（`FolderPicker.Pick`），并在等待期间用 `PeekMessage` 继续泵消息保持 UI 响应。**改任何 shell 对话框调用都要检查这一点。**
+28. **shell 对话框必须在 STA 线程上调用**：`SHBrowseForFolderW` / `IFileDialog::Show`（选文件夹）在 **MTA** 线程上调用时，对话框窗口**会被创建但永远不显示**（`WS_VISIBLE` 没置上，句柄存在却看不见），且不报错。.NET 主线程默认是 MTA（`CoInitializeEx(COINIT_APARTMENTTHREADED)` 会返回 `RPC_E_CHANGED_MODE`），所以本项目的「添加文件夹…」必须放到自建的 STA 线程执行（`FolderPicker.Pick`），并在等待期间用 `PeekMessage` 继续泵消息保持 UI 响应。**改任何 shell 对话框调用都要检查这一点。**
 29. **文件夹条目标记 `IsFolder` 要向后兼容**：旧 `config.json` 没有这个字段（默认 `false`），所以扫描时还要用 `Directory.Exists(path)` 兜底推断，否则老配置里的目录条目会退化成「启动程序」。自检有「旧配置按目录路径自动识别为文件夹」断言。
+30. **现代文件夹对话框（IFileDialog）两个大坑**：
+   - **vtable 槽位顺序 ≠ 微软文档顺序**：文档里 IFileDialog 的方法列表是**按字母排的**，而 COM 调用按 vtable 位置。实际顺序（本机逐槽实测）：`3 Show / 4 SetFileTypes / 5 SetFileTypeIndex / 6 GetFileTypeIndex / 7 Advise / 8 Unadvise / 9 SetOptions / 10 GetOptions / 11 SetFolder / 12 SetDefaultFolder / 13 GetFolder / 14 GetCurrentSelection / 15 SetFileName / 16 GetFileName / 17 SetFileNameLabel / 18 SetDefaultExtension / 19 Close / 20 GetResult`。**按文档顺序写会把 `GetResult` 写到槽 19（Close）上 → 选完目录拿不到结果，表现为「选完又弹出旧的小树形窗」**。自检有「IFileDialog 槽位对齐（GetResult 槽位探测）」断言（未显示时槽 20 返回 `E_UNEXPECTED 0x8000FFFF`，错位则返回别的值）。
+   - **`Marshal.GetObjectForIUnknown` 不会 AddRef**：RCW 直接接管那份引用，**多写一句 `Marshal.Release` 会把对象提前释放掉**——对话框虽然能弹出来，但一关闭对象就死了，`GetResult` 拿不到结果。同理 `GetResult` 交回来的 `IShellItem*` 是**我们**的引用，要自己 `Release`。
+   - 附：CLSID 用 `DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7`（comdlg32.dll 的「File Open Dialog」）、IID 用 `d57c7288-d4ad-4768-be02-9d969532d960`（IID_IFileOpenDialog）；`FOS_PATHMUSTEXIST` 与 `FOS_PICKFOLDERS` 同时使用会被 shell 判为非法（`SetOptions` 返回 `E_INVALIDARG`），所以只留 `PICKFOLDERS|FORCEFILESYSTEM|FILEMUSTEXIST|NOCHANGEDIR`。
 
 ## 运行环境兼容性
 

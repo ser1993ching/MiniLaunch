@@ -211,6 +211,28 @@ public static class SelfTest
             try { Directory.Delete(folderDir, true); } catch { }
         }
 
+        // ---- 2c. 名称输入窗按钮 / 现代文件夹选择对话框 ----
+        // 名称窗以前只能按回车，现在有自绘的「取消 / 确定」按钮，点击即确认
+        var bl = NameDialog.ButtonLayout(460, 214, 1f);
+        bool btnsInside = bl[0] >= 0 && bl[1] >= 0 && bl[4] + bl[6] <= 460 && bl[5] + bl[7] <= 214
+                          && bl[4] > bl[0] + bl[2];   // 确定在取消右侧，且都在窗口内
+        Check(btnsInside, "名称输入窗：按钮布局在窗口内（取消在左、确定在右）",
+            $"cancel=({bl[0]},{bl[1]},{bl[2]}x{bl[3]}) ok=({bl[4]},{bl[5]},{bl[6]}x{bl[7]})");
+        Check(NameDialog.HitButton(460, 214, 1f, bl[4] + bl[6] / 2, bl[5] + bl[7] / 2) == NameDialog.BtnOk,
+            "名称输入窗：点击「确定」按钮命中");
+        Check(NameDialog.HitButton(460, 214, 1f, bl[0] + bl[2] / 2, bl[1] + bl[3] / 2) == NameDialog.BtnCancel,
+            "名称输入窗：点击「取消」按钮命中");
+        Check(NameDialog.HitButton(460, 214, 1f, 5, 5) == -1,
+            "名称输入窗：空白处不误命中按钮");
+        // vtable 槽位对齐回归：GetResult 必须落在槽 20（未显示时返回 E_UNEXPECTED）
+        Check(FolderPicker.CanProbeResultSlot(),
+            "文件夹选择：IFileDialog 槽位对齐（GetResult 槽位探测）",
+            $"hr=0x{FolderPicker.LastResultSlotHr:X8}");
+        bool modernOk = FolderPicker.CanCreateModernDialog();
+        Check(modernOk,
+            "文件夹选择：现代（资源管理器风格）对话框 IFileDialog 可创建",
+            $"hr=0x{FolderPicker.LastCreateHr:X8}");
+
         // ---- 3. 拼音别名 ----
         Check(Pinyin.Lookup("微信").Contains("wx"), "拼音别名 微信→wx");
         Check(Pinyin.Lookup("企业微信").Contains("qywx"), "拼音别名 企业微信→qywx");

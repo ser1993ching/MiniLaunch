@@ -24,6 +24,7 @@ internal static class Win32
     public const int WM_CONTEXTMENU = 0x007B;
     public const int WM_KEYDOWN = 0x0100;
     public const int WM_HOTKEY = 0x0312;
+    public const int WM_SETCURSOR = 0x0020;
     public const int WM_MOUSEMOVE = 0x0200;
     public const int WM_LBUTTONDOWN = 0x0201;
     public const int WM_LBUTTONUP = 0x0202;
@@ -360,6 +361,12 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern IntPtr LoadCursorW(IntPtr hInstance, int lpCursorName);
     public const int IDC_ARROW = 32512;
+    public const int IDC_HAND = 32649;
+    public const int HTCLIENT = 1;
+
+    /// <summary>设置光标形状（IDC_HAND 用 LoadCursorW(null, IDC_HAND) 取）。</summary>
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetCursor(IntPtr hCursor);
 
     [DllImport("user32.dll")]
     public static extern uint GetDpiForWindow(IntPtr hWnd);
@@ -510,6 +517,10 @@ internal static class Win32
     public const uint COINIT_APARTMENTTHREADED = 0x2;
     [DllImport("ole32.dll")]
     public static extern void CoUninitialize();
+    /// <summary>创建 COM 对象（现代 shell 对话框 IFileDialog 靠它实例化）。</summary>
+    [DllImport("ole32.dll")]
+    public static extern int CoCreateInstance(ref Guid rclsid, IntPtr pUnkOuter, uint dwClsContext, ref Guid riid, out IntPtr ppv);
+    public const uint CLSCTX_INPROC_SERVER = 1;
     /// <summary>释放 Shell 返回的 COM 内存（SHBrowseForFolder 的 PIDL）。</summary>
     [DllImport("ole32.dll")]
     public static extern void CoTaskMemFree(IntPtr pv);

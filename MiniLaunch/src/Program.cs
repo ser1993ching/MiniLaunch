@@ -390,7 +390,7 @@ public static class Program
                 _cfg.AutoStart = false;
                 ConfigStore.SaveConfig(_cfg);
                 Tray.Notify("开机自启设置失败",
-                    "注册表写入被拒绝或被安全软件拦截。可改用菜单「安装到本地并设为开机自启」，或手动添加：\n" +
+                    "注册表写入被拒绝或被安全软件拦截。可手动添加：\n" +
                     "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run → MiniLaunch = \"" + exe + "\"");
                 return;
             }
@@ -440,33 +440,7 @@ public static class Program
         catch { }
     }
 
-    /// <summary>托盘菜单「安装到本地并设为开机自启」：复制到 %LOCALAPPDATA%\MiniLaunch 后指向它。</summary>
-    public static void InstallLocalAndEnable()
-    {
-        string? exe = Environment.ProcessPath;
-        if (string.IsNullOrEmpty(exe))
-        {
-            Tray.Notify("安装失败", "找不到当前程序文件路径。");
-            return;
-        }
-        var (ok, msg) = AutoStart.InstallLocal(exe);
-        if (!ok)
-        {
-            Tray.Notify("安装到本地失败", msg);
-            return;
-        }
-        if (!AutoStart.TryEnable(AutoStart.InstalledExe))
-        {
-            Tray.Notify("开机自启设置失败", "程序已复制到本地，但注册表写入失败。");
-            return;
-        }
-        _cfg.AutoStart = true;
-        ConfigStore.SaveConfig(_cfg);
-        Tray.Notify("已安装到本地并设为开机自启",
-            AutoStart.InstalledExe + "\n本次运行仍是原位置，下次重启后由本地副本启动。");
-    }
-
-    /// <summary>开机自启诊断报告（写入 %APPDATA%\MiniLaunch\autostart-report.txt）。</summary>
+    /// <summary>开机自启自愈报告（每次启动写一份到 %APPDATA%\MiniLaunch\autostart-report.txt）。</summary>
     static string BuildAutoStartReport()
     {
         string? raw = AutoStart.ReadRawCommand();
@@ -493,55 +467,13 @@ public static class Program
         sb.AppendLine();
         sb.AppendLine("热键      " + _cfg.Hotkey + " → " + (HotkeyOk ? "已注册" : "★ 注册失败（可能被输入法占用）"));
         sb.AppendLine("UWP 扫描  " + (UwpScanned ? "已完成" : "尚未完成"));
-        sb.AppendLine("任务计划  " + (AutoStart.IsTaskRegistered() ? "已注册" : "未注册"));
         sb.AppendLine("稳定安装目录 " + AutoStart.InstallDir);
         sb.AppendLine();
         sb.AppendLine("--- 本次启动的自愈过程 ---");
         sb.AppendLine(AutoStart.LastHealDetail);
         sb.AppendLine();
-        sb.AppendLine("建议：托盘菜单「安装到本地并设为开机自启」，把程序复制到 %LOCALAPPDATA%\\MiniLaunch 后再启用自启。");
+        sb.AppendLine("建议：把程序放在稳定位置（如 %LOCALAPPDATA%\\MiniLaunch）再启用开机自启。");
         return sb.ToString();
-    }
-
-    /// <summary>托盘菜单「开机自启诊断…」：把注册表/文件/热键/UWP 扫描状态一次说清。</summary>
-    public static void ShowAutoStartDiagnostics()
-    {
-        string report = BuildAutoStartReport();
-        string reportPath = Path.Combine(Paths.Dir, "autostart-report.txt");
-        try { File.WriteAllText(reportPath, report); } catch { }
-
-        string brief =
-            "注册表项：" + (string.IsNullOrEmpty(AutoStart.ReadRawCommand()) ? "(未设置)" : "已设置") + "\n" +
-            "目标文件存在：" + (AutoStart.IsActive() ? "是" : "否  ← 没自启的原因") + "\n" +
-            "当前路径：" + (Environment.ProcessPath != null && AutoStart.IsBuildOutput(Environment.ProcessPath) ? "构建目录（临时，不稳定）" : "稳定") + "\n" +
-            "热键：" + (HotkeyOk ? "正常" : "注册失败") + "\n" +
-            "UWP 扫描：" + (UwpScanned ? "已完成" : "未完成") + "\n\n" +
-            "完整报告：" + reportPath;
-
-        try
-        {
-            // 不用 MB_ICONINFORMATION：带图标类型就会播系统「信息」提示音，本程序要求零提示音
-            Win32.MessageBoxW(_win?.Hwnd ?? IntPtr.Zero, brief, "开机自启诊断", Win32.MB_OK);
-        }
-        catch { }
-    }
-
-    /// <summary>注册「登录即启动」的任务计划（不需要管理员）。用于 Run 项被安全软件拦截时的替代方案。</summary>
-    public static void RegisterLogonTask()
-    {
-        string exe = AutoStart.InstalledExe;
-        if (!File.Exists(exe))
-        {
-            var cur = Environment.ProcessPath;
-            if (string.IsNullOrEmpty(cur) || !File.Exists(cur)) { Tray.Notify("注册失败", "找不到可用的程序路径。"); return; }
-            var (ok, msg) = AutoStart.InstallLocal(cur);
-            if (!ok) { Tray.Notify("注册失败", msg); return; }
-            exe = AutoStart.InstalledExe;
-        }
-        if (AutoStart.RegisterLogonTask(exe))
-            Tray.Notify("已注册登录自启任务", exe);
-        else
-            Tray.Notify("注册任务计划失败", "schtasks 执行失败，可能被策略限制。");
     }
 
     // ================= 热键设置 =================
