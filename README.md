@@ -95,7 +95,7 @@ The table below shows **measured numbers** (Windows 10/11, Release self-containe
 | --- | --- | --- |
 | **全局热键呼出** | Global hotkey | 默认 `Ctrl+Space`，可从托盘菜单现场录制修改，注册失败时气泡提示并保留旧配置 |
 | **模糊搜索** | Fuzzy search | 空格分词 **AND** 匹配；打分顺序：名称前缀 > 名称包含 > 别名/路径，再叠加使用频率权重 |
-| **拼音别名** | Pinyin aliases | 内置常见中文软件拼音缩写表，输入 `wx` 即可搜到「微信」，无需引入全量拼音库 |
+| **拼音搜索** | Pinyin search | 内置 GB2312 全字集（6763 字）拼音表：全拼 `qidongqi`、首字母 `qdq`、中段 `hy` 都能搜到中文名；另有一张常见软件别名表（`wx`→微信）。零 NuGet、零外部依赖 |
 | **四路来源聚合** | Multi-source aggregation | 自定义条目 > 开始菜单 > 注册表卸载项 > UWP 商店应用，按小写名称去重合并 |
 | **图标缓存** | Icon cache | 图标在**后台线程**提取，UI 绘制只读缓存；LRU 保留 64 项 HICON，驱逐时销毁 |
 | **拖放添加** | Drag & drop | 把 exe / 快捷方式拖进窗口，立即添加为自定义条目并持久化 |
@@ -144,10 +144,17 @@ Type "微信" to filter instantly; the matched row is highlighted.
   <img src="docs/screenshots/main-search.png" width="520" alt="Search" />
 </p>
 
-### 3. 拼音别名搜索 · Pinyin alias search
+### 3. 拼音搜索 · Pinyin search
 
-只输入 `wx`，通过内置别名表命中「微信」。
-Typing just `wx` hits 「微信」 through the built-in alias table.
+中文名支持三种输入：全拼 `qidongqi`、首字母 `qdq`、中段 `hy`（腾讯会议）；常见软件另有别名 `wx`→微信。
+Chinese names match by full pinyin (`qidongqi`), initials (`qdq`) or any middle segment (`hy` → 腾讯会议); popular apps also have aliases like `wx` → 微信.
+
+拼音表覆盖 GB2312 一级 + 二级共 6763 字，由 `tools/make_pinyin.py` 离线生成（运行时零依赖、零 NuGet）：
+The table covers all 6763 GB2312 characters and is generated offline by `tools/make_pinyin.py` (no runtime dependency, no NuGet):
+
+```bash
+python tools/make_pinyin.py    # → MiniLaunch/src/PinyinTable.g.cs（位图 2613 B + 9bit 索引 7609 B + 音节表 1692 B ≈ 11.9 KB）
+```
 
 <p align="center">
   <img src="docs/screenshots/main-pinyin.png" width="520" alt="Pinyin search" />
@@ -264,7 +271,7 @@ MiniLaunch/src/
   Config.cs        AppConfig / CustomEntry / UsageDb / JsonCtx 源生成 / 原子写配置
   Entry.cs         条目模型与合并去重（Custom > StartMenu > Registry > Uwp）
   Scanners.cs      开始菜单 / 注册表 / UWP 三路扫描器
-  Pinyin.cs        常见中文软件拼音别名表
+  Pinyin.cs        拼音搜索：手工别名表 + GB2312 全字集（6763 字）全拼/首字母/中段（表见 PinyinTable.g.cs，由 tools/make_pinyin.py 生成）
   Search.cs        分词 AND 匹配与打分排序
   IconCache.cs     HICON 提取与 LRU 缓存
   AppIcon.cs       应用图标加载（RT_GROUP_ICON）

@@ -275,10 +275,44 @@ public static class SelfTest
             "文件夹选择：现代（资源管理器风格）对话框 IFileDialog 可创建",
             $"hr=0x{FolderPicker.LastCreateHr:X8}");
 
-        // ---- 3. 拼音别名 ----
-        Check(Pinyin.Lookup("微信").Contains("wx"), "拼音别名 微信→wx");
-        Check(Pinyin.Lookup("企业微信").Contains("qywx"), "拼音别名 企业微信→qywx");
-        Check(Pinyin.Lookup("计算器").Contains("jsq"), "拼音别名 计算器→jsq");
+        // ---- 3. 拼音：手工别名 + GB2312 全字集通用拼音表 ----
+        Check(Pinyin.Expand("微信").Contains("wx"), "拼音别名 微信→wx");
+        Check(Pinyin.Expand("企业微信").Contains("qywx"), "拼音别名 企业微信→qywx");
+        Check(Pinyin.Expand("计算器").Contains("jsq"), "拼音别名 计算器→jsq");
+
+        // 通用拼音表（tools/make_pinyin.py 生成）：一级汉字全拼/首字母/中段
+        Check(Pinyin.TableCharCount() == 6763, "拼音表覆盖 GB2312 全字集 6763 字", $"count={Pinyin.TableCharCount()}");
+        Check(Pinyin.SyllableOf('启') == "qi", "拼音表 启→qi", $"got={Pinyin.SyllableOf('启')}");
+        Check(Pinyin.SyllableOf('淼') == "miao", "拼音表 二级汉字 淼→miao", $"got={Pinyin.SyllableOf('淼')}");
+        Check(Pinyin.SyllableOf('鑫') == "xin", "拼音表 二级汉字 鑫→xin", $"got={Pinyin.SyllableOf('鑫')}");
+        Check(Pinyin.SyllableOf('A') == null && Pinyin.SyllableOf((char)0x3000) == null,
+            "拼音表 非汉字返回 null（不越界）");
+        var expQD = Pinyin.Expand("启动器");
+        Check(expQD.Contains("qidongqi") && expQD.Contains("qdq"), "拼音扩展 启动器→qidongqi/qdq", expQD);
+        var expDC = Pinyin.Expand("电磁计算");
+        Check(expDC.Contains("diancijisuan") && expDC.Contains("dcjs"), "拼音扩展 电磁计算→diancijisuan/dcjs", expDC);
+        var expHY = Pinyin.Expand("腾讯会议");
+        Check(expHY.Contains("hy") && expHY.Contains("huiyi"), "拼音扩展 支持中段（会议→hy/huiyi）", expHY);
+        Check(Pinyin.Expand("docker desktop").Length == 0, "拼音扩展 纯英文名不产生拼音串");
+
+        // 搜索层：拼音能搜到中文文件夹名 / 中段
+        var uPy = new UsageDb();
+        var engPy = new SearchEngine(uPy);
+        var eDc = Scanners.Make("电磁计算", @"D:\Desktop\电磁计算", "", EntrySource.Custom, @"D:\Desktop\电磁计算", isFolder: true);
+        var eQD = Scanners.Make("启动器", @"E:\code\启动器", "", EntrySource.Custom, @"E:\code\启动器", isFolder: true);
+        var eHy = Scanners.Make("腾讯会议", @"C:\x\wemeet.exe", "", EntrySource.StartMenu, @"C:\x\wemeet.exe");
+        var eDk = Scanners.Make("Docker Desktop", @"C:\x\docker.exe", "", EntrySource.StartMenu, @"C:\x\docker.exe");
+        engPy.SetEntries(new List<Entry> { eDc, eQD, eHy, eDk });
+        Check(engPy.Query("dcjs", 5) is { Count: 1 } q1 && ReferenceEquals(q1[0], eDc), "拼音搜索 dcjs→电磁计算");
+        Check(engPy.Query("qidongqi", 5) is { Count: 1 } q2 && ReferenceEquals(q2[0], eQD), "全拼搜索 qidongqi→启动器");
+        Check(engPy.Query("hy", 5) is { Count: 1 } q3 && ReferenceEquals(q3[0], eHy), "拼音中段 hy→腾讯会议");
+        Check(engPy.Query("docker", 5) is { Count: 1 } q4 && ReferenceEquals(q4[0], eDk), "拼音表不影响英文名搜索");
+
+        // 拼音扩展性能：扫描 267 条目时开销要可忽略（留足余量，避免机器惊动误报）
+        var swPy = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < 200; i++) Pinyin.Expand("腾讯会议启动器电磁计算网易云音乐");
+        swPy.Stop();
+        Check(swPy.ElapsedMilliseconds < 200, "拼音扩展 200 次调用 < 200ms", $"{swPy.ElapsedMilliseconds}ms");
 
         // ---- 4. 扫描器：开始菜单 ----
         var sm = Scanners.ScanStartMenu();

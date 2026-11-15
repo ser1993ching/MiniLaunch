@@ -348,7 +348,8 @@ public static class Scanners
             IsFolder = isFolder,
         };
         e.NameLower = name.ToLowerInvariant();
-        string alias = Pinyin.Lookup(name);
+        // 拼音检索串：手工别名 + GB2312 全字集（6763 字）的全拼/首字母/中段后缀
+        string alias = Pinyin.Expand(name);
         string fileLower = SafeLowerFileName(launchPath);
         string dirLower = SafeLowerDir(launchPath);
         // 文件夹条目的检索串里已含目录自身的名字（fileLower = 目录名），别名不同也能搜到

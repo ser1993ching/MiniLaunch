@@ -1,10 +1,19 @@
-﻿using System.Text;
+﻿using System.Numerics;
+using System.Text;
 
 namespace MiniLaunch;
 
-// 常见中文软件拼音首字母别名表：命中名称片段即附加对应缩写，使 "wx" 能搜到 "微信"
+// 拼音支持：手工别名表（多音字/俗称/外语名）+ 通用拼音表（GB2312 一级+二级 6763 字，见 PinyinTable.g.cs）
+//
+// 生成方式（运行时零依赖、零 NuGet；表由离线脚本产出）：
+//     python tools/make_pinyin.py   → MiniLaunch/src/PinyinTable.g.cs
+//
+// 名字里能搜到的东西（全部拼进 Entry.HayLower，走 55 分档）：
+//   「启动器」→ qidongqi（全拼）/ qdq（首字母）/ dongqi、qi（中段）
 public static class Pinyin
 {
+    // 手工别名表：覆盖多音字（重庆/长城）、俗称（计算器→jsq）、外来名（Chrome→ggllq）、
+    // 以及表里没有的新软件。命中名称片段即附加别名，优先级高于通用拼音（先拼进检索串）。
     static readonly (string Key, string Alias)[] Map =
     {
         ("微信", "wx weixin chat"),
@@ -61,17 +70,134 @@ public static class Pinyin
         ("回收站", "huishouzhan recyclebin"),
     };
 
-    public static string Lookup(string name)
+    // ============ 拼音表（GB2312 6763 字，稠密 9bit 索引 + 位图定位） ============
+
+    static string[]? _syl;                       // 音节表（空格分隔，懒解析）
+    static ushort[]? _rankPrefix;                // 位图按字节的前缀 popcount，避免逐字线性求和
+
+    static string[] Syl => _syl ??= PinyinTable.Syllables.Split(' ');
+
+    static ushort[] RankPrefix
+    {
+        get
+        {
+            if (_rankPrefix != null) return _rankPrefix;
+            var f = PinyinTable.Flags;
+            var p = new ushort[f.Length + 1];
+            int sum = 0;
+            for (int i = 0; i < f.Length; i++)
+            {
+                p[i] = (ushort)sum;
+                sum += BitOperations.PopCount(f[i]);
+            }
+            p[f.Length] = (ushort)sum;
+            return _rankPrefix = p;
+        }
+    }
+
+    /// <summary>单字拼音音节（无声调，小写）；非 GB2312 汉字/未收录/非汉字 → null。</summary>
+    public static string? SyllableOf(char c)
+    {
+        int off = c - PinyinTable.BlockLo;
+        if (off < 0 || off >= PinyinTable.BlockLen) return null;
+        if ((PinyinTable.Flags[off >> 3] & (1 << (off & 7))) == 0) return null;
+        int id = IndexAt(RankOf(off));
+        if (id <= 0) return null;
+        var syl = Syl;
+        return id <= syl.Length ? syl[id - 1] : null;
+    }
+
+    // 位图 [0, off) 内 1 的个数 = 该字在稠密索引表里的序号
+    static int RankOf(int off)
+    {
+        int bytes = off >> 3, rem = off & 7;
+        int n = RankPrefix[bytes];
+        if (rem != 0) n += BitOperations.PopCount((uint)(PinyinTable.Flags[bytes] & ((1 << rem) - 1)));
+        return n;
+    }
+
+    // 取第 rank 个 9bit 索引（跨字节读取，最多 3 字节）
+    static int IndexAt(int rank)
+    {
+        const int Bits = PinyinTable.BitsPerIndex;
+        int bit = rank * Bits, b = bit >> 3, sh = bit & 7;
+        var d = PinyinTable.Ids;
+        int v = d[b];
+        if (b + 1 < d.Length) v |= d[b + 1] << 8;
+        if (b + 2 < d.Length) v |= d[b + 2] << 16;
+        return (v >> sh) & ((1 << Bits) - 1);
+    }
+
+    /// <summary>表内汉字总数（自检用；应为 6763）。</summary>
+    public static int TableCharCount()
+    {
+        int n = 0;
+        for (int i = 0; i < PinyinTable.BlockLen; i++)
+            if ((PinyinTable.Flags[i >> 3] & (1 << (i & 7))) != 0) n++;
+        return n;
+    }
+
+    // ============ 检索串扩展 ============
+
+    /// <summary>
+    /// 生成一个名字的拼音检索串：手工别名 + 每段连续汉字的 全拼 / 首字母 / 各后缀（支持中段匹配）。
+    /// 非汉字（英文、数字）不产生拼音，仅作为段落分隔。
+    /// </summary>
+    public static string Expand(string name)
     {
         if (string.IsNullOrEmpty(name)) return "";
-        var sb = new StringBuilder();
+        var sb = new StringBuilder(name.Length * 4);
+
         foreach (var (k, v) in Map)
         {
-            if (name.Contains(k, StringComparison.Ordinal))
+            if (name.Contains(k, StringComparison.Ordinal)) sb.Append(v).Append(' ');
+        }
+
+        int i = 0, n = name.Length;
+        var syls = new List<string>(8);
+        while (i < n)
+        {
+            var s = SyllableOf(name[i]);
+            if (s == null) { i++; continue; }
+            int start = i;
+            syls.Clear();
+            while (start < n)
             {
-                sb.Append(v).Append(' ');
+                var s2 = SyllableOf(name[start]);
+                if (s2 == null) break;
+                syls.Add(s2);
+                start++;
             }
+            AppendSegment(sb, syls);
+            i = start;
         }
         return sb.ToString().Trim();
+    }
+
+    // 一段连续汉字：全拼、首字母，再加每个后缀（「腾讯会议」→ tengxunhuiyi/txhy, xunhuiyi/xhy, huiyi/hy, yi/y）
+    static void AppendSegment(StringBuilder sb, List<string> syls)
+    {
+        int m = syls.Count;
+        if (m == 0) return;
+        var full = new StringBuilder(m * 6);
+        var ini = new StringBuilder(m);
+        foreach (var s in syls)
+        {
+            full.Append(s);
+            ini.Append(s[0]);
+        }
+        sb.Append(full).Append(' ').Append(ini).Append(' ');
+
+        // 中段匹配：后缀只对不太长的段落生成，避免检索串膨胀
+        if (m <= 16)
+        {
+            for (int k = 1; k < m; k++)
+            {
+                for (int t = k; t < m; t++) sb.Append(syls[t]);
+                sb.Append(' ');
+                for (int t = k; t < m; t++) sb.Append(syls[t][0]);
+                sb.Append(' ');
+            }
+        }
     }
 }
