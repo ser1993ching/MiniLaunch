@@ -18,34 +18,37 @@ Windows 桌面启动器（对标 uTools，只做「呼出 → 搜索 → 启动�
 cd MiniLaunch && dotnet build
 
 # 无头自检（必须全绿，退出码 0）——改代码后必跑
-MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --selftest
+./artifacts/bin/MiniLaunch/debug/MiniLaunch.exe --selftest
 # 报告：会产生 selftest-report.txt（结论同时写 stdout 管道）
 
 # 发布单文件（自包含 + 裁剪，12MB 左右；不要开 R2R，见下方「应用图标」）
-# 注意：-o 必须给「纯 ASCII 绝对路径」。本仓库目录名含中文（启动器），
-# 经 bash 包装器执行时相对路径解析会把中文段吃掉，产物会落到 E:\code\publish\...（错位）。
-# 正确做法：先发布到 ASCII 临时目录，再拷贝回 publish/win-x64
-dotnet publish -c Release -r win-x64 --self-contained \
-  -p:PublishSingleFile=true -p:PublishTrimmed=true \
-  -o "E:\code\_tmp_publish"
-cp /e/code/_tmp_publish/MiniLaunch.exe /e/code/_tmp_publish/MiniLaunch.pdb \
+# 根目录的 Directory.Build.props 设置了 ArtifactsPath：bin/obj/publish 全部落在
+# 仓库内的 artifacts\ 下（artifacts\bin|obj|publish\MiniLaunch\<config>[_<rid>]\）。
+# 所以 dotnet publish【不需要 -o】：不带 -o 就写进 artifacts\publish\MiniLaunch\release_win-x64\，
+# 仓库外不再产生任何目录。（早先的做法是发到仓库外的 E:\code\_tmp_publish 再拷回来——
+# 因为本仓库路径含中文，命令行传相对路径时中文段会被 shell 吞掉；现在根本不用传路径。）
+dotnet publish MiniLaunch/MiniLaunch.csproj -c Release -r win-x64 --self-contained \
+  -p:PublishSingleFile=true -p:PublishTrimmed=true
+# 交付目录固定为仓库内 publish/win-x64（归档版本另建 publish/win-x64-<版本>）：
+cp artifacts/publish/MiniLaunch/release_win-x64/MiniLaunch.exe \
+   artifacts/publish/MiniLaunch/release_win-x64/MiniLaunch.pdb \
    "/e/code/启动器/publish/win-x64/"
-# 发布后必须核对：./MiniLaunch.exe --selftest 应显示 81 项通过（拿到旧产物会显示 70/60/45/38）
+# 发布后必须核对：./MiniLaunch.exe --selftest 应显示 82 项通过（拿到旧产物会显示 70/60/45/38）
 ```
 
 开发辅助（仅调试用，发布不包含）：
 
 ```bash
 # 预览模式：显示主窗口且失焦不自动隐藏（配合截图脚本）
-MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --preview
+./artifacts/bin/MiniLaunch/debug/MiniLaunch.exe --preview
 # 热键录制窗预览
-MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --hotkey-dialog
+./artifacts/bin/MiniLaunch/debug/MiniLaunch.exe --hotkey-dialog
 # 名称输入窗预览（文件夹快捷入口起名）
-MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --preview --name-dialog
+./artifacts/bin/MiniLaunch/debug/MiniLaunch.exe --preview --name-dialog
 # 文件夹选择对话框预览（验证 STA 线程方案，见坑 #28）
-MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --preview --pick-folder
+./artifacts/bin/MiniLaunch/debug/MiniLaunch.exe --preview --pick-folder
 # 预填搜索词（排查搜索/排版问题；建议配合 --preview）
-MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --preview --query docker
+./artifacts/bin/MiniLaunch/debug/MiniLaunch.exe --preview --query docker
 
 # 截图窗口（PrintWindow 直出 PNG，不依赖窗口是否在最前）
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/shot.ps1 -Out C:\temp\shot.png
@@ -111,7 +114,9 @@ MiniLaunch/src/
   Entry.cs       Entry 模型 + EntryMerger（优先级：Custom > StartMenu > Registry > Uwp，按小写名去重）
   Scanners.cs    StartMenuScanner（递归 .lnk/.url）/ RegistryScanner（3 个 Uninstall 键 + 噪声过滤）/ UwpScanner（powershell Get-StartApps → JSON，7 天磁盘缓存）
   Pinyin.cs      常见中文软件别名表（wx→微信），不引全量拼音表
-  Search.cs      分词 AND 匹配 + 打分（名前缀 100 > 名包含 80+位置 > 别名 60 > 路径 30；+log2(1+Count)*12；24h 内 +15）
+  Search.cs      分词 AND 匹配 + 打分（名前缀 100 > 名包含 80+位置 > 路径/别名包含 55；+log2(1+Count)*12；24h 内 +15 / 7 天内 +8）
+                 空查询（刚呼出）排序键：① 使用次数降序 ② 次数相同时「自定义文件夹快捷入口」优先 ③ 最近使用时间降序 ④ 名称序数
+                 （文件夹曾无条件置顶，用户配 4~5 个文件夹时首屏 8 行全被占满、常用程序被挤掉；现降为次级键，自检有两条断言守住）
   IconCache.cs   HICON 提取（SHGetFileInfo / ExtractIconEx）+ LRU(64)，驱逐时 DestroyIcon；提取走后台线程（UI 只读缓存，见「易踩的坑」第 19 条）
   AppIcon.cs     应用图标加载（exe 模块 RT_GROUP_ICON 32512 → LoadImageW）
   Dpi.cs         DPI 感知设置与 DPI 查询（老系统降级，见「易踩的坑」第 17 条）
@@ -125,10 +130,16 @@ MiniLaunch/src/
   NameDialog.cs  名称输入小窗（给文件夹快捷入口起名 / 重命名；Enter 确认 · Esc 取消 · 也可点自绘的「取消 / 确定」按钮）
   NativeOut.cs   管道 stdout 输出（WinExe 无控制台）
   SelfTest.cs    --selftest 全部断言
-方案.md / 详细计划.md / 审查记录.md   设计依据与已知问题处置（改架构前先读）
+方案.md / 详细计划.md / 审查记录.md   设计依据与已知问题处置（改架构前先读；.gitignore 里仅本地保留，不进仓库）
 ```
 
+根目录其他文件：`Directory.Build.props`（构建产物统一到仓库内 `artifacts/`）、`README.md`（对外介绍，含下载指引）、`docs/github-about.md`（GitHub 仓库简介文案）、`docs/代码审查报告.md`、`docs/screenshots/`、`LICENSE`（MIT）、`.github/workflows/release.yml`（推标签自动发版 + 跑 `--selftest` 门禁）、`.gitattributes`。
+
+`tools/`：`shot.ps1`（PrintWindow 截图）/ `rows.py`（像素校验行对齐）/ `make_icon.py`（生成 app.ico）/ `gitee_release.py`（Gitee 发版）/ `hotkey-check.ps1`（按类名查窗口、读标题，排查热键与窗口状态）/ `push-all.sh`（手动推双远端，未提交改动会先拦下）/ `install-autopush-hook.sh` + `git-hooks/`（post-commit 自动推送钩子）。
+
 `MiniLaunch/app.ico` 为应用图标（生成脚本 `tools/make_icon.py`，见「应用图标」）。
+
+改动完成基线（2026-11-15 实测）：`dotnet build` 0 警告 0 错误，`--selftest` **82 通过 / 0 失败**，退出码 0。
 
 ## 运行时数据
 
@@ -216,7 +227,7 @@ _footerY/_footerH   底部快捷键栏（38）
 ## 工作方式约定
 
 - 先读 `方案.md` / `详细计划.md` / `审查记录.md` 再动结构性代码；功能裁剪清单在 `方案.md` 第八节（插件/剪贴板/截图/同步等**明确不做**）。
-- 改动完成的标准：`dotnet build` 0 警告 0 错误 + `--selftest` 全绿（当前基线 81 项通过）。新增能力时同步加断言到 `SelfTest.cs`。
+- 改动完成的标准：`dotnet build` 0 警告 0 错误 + `--selftest` 全绿（当前基线 82 项通过）。新增能力时同步加断言到 `SelfTest.cs`。
 - 提交后会自动推送到 GitHub 和 Gitee（全局 git hook，见 `tools/install-autopush-hook.sh`）：
   每次 `git commit` 触发 `post-commit` → 逐个检查 **github.com / gitee.com** 的远端，
   先判断平台上**是否已创建对应仓库**（GitHub 走 `api.github.com`，Gitee 走 `gitee.com/api/v5`），

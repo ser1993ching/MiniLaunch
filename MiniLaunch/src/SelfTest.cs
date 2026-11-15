@@ -216,11 +216,23 @@ public static class SelfTest
             Check(fEntry != null && fEntry.IconRef == folderDir, "文件夹条目图标来源为目录本身");
             Check(fEntries.Any(e => !e.IsFolder && e.Name == "记事本"), "普通程序条目不被误判为文件夹");
 
-            // 空查询：自定义文件夹置顶（“常用文件夹”一眼看到）
+            // 空查询：文件夹不再无条件置顶（用户配了 4~5 个文件夹时会占满首屏、把常用程序挤下去），
+            // 改为「次数相同时文件夹优先」——这里用空用量库（两边次数都是 0）验证次级键生效。
             var engF = new SearchEngine(new UsageDb());
             engF.SetEntries(fEntries);
             var idleF = engF.Query("", 10);
-            Check(idleF.Count > 0 && idleF[0].IsFolder, "空查询时自定义文件夹排在最前");
+            Check(idleF.Count >= 2 && idleF[0].IsFolder && idleF[0].Name == "工作",
+                "空查询次数相同时文件夹优先", $"r=[{string.Join(",", idleF.Select(e => e.Name))}]");
+
+            // 本次改动的主诉求：常用程序必须排在未使用的文件夹前面
+            var uIdleF = new UsageDb();
+            var appEntry = fEntries.First(e => !e.IsFolder);
+            uIdleF.Recs[appEntry.UniqueKey] = new UsageRec { Count = 3, LastTicks = DateTime.UtcNow.Ticks };
+            var engF2 = new SearchEngine(uIdleF);
+            engF2.SetEntries(fEntries);
+            var idleF2 = engF2.Query("", 10);
+            Check(idleF2.Count >= 2 && ReferenceEquals(idleF2[0], appEntry) && !idleF2[0].IsFolder,
+                "空查询常用程序优先于未使用文件夹", $"r=[{string.Join(",", idleF2.Select(e => e.Name))}]");
             // 按别名搜索
             var hitF = engF.Query("工作", 10);
             Check(hitF.Count == 1 && hitF[0].IsFolder, "按别名搜索到文件夹条目");

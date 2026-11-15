@@ -1,0 +1,17 @@
+﻿<Project>
+
+  <!--
+    统一构建产物位置：全部落在仓库内（E:\code\启动器\artifacts），绝不写到仓库之外。
+    目录布局（.NET 8 标准 artifacts 布局）：
+      artifacts\obj\MiniLaunch\<config>[_<rid>]\     中间产物（原 MiniLaunch\obj）
+      artifacts\bin\MiniLaunch\<config>[_<rid>]\     构建输出（原 MiniLaunch\bin\...）
+      artifacts\publish\MiniLaunch\<config>_<rid>\   发布输出（原仓库外的 E:\code\_tmp_publish）
+    好处：dotnet publish 不再需要 -o 传外部临时目录（本仓库路径含中文，命令行传路径
+    曾被 shell 吞掉中文段 → 产物错位到 E:\code\publish\），不带 -o 就直接写进仓库内。
+  -->
+  <PropertyGroup>
+    <ArtifactsPath>$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
+    <UseArtifactsOutput>true</UseArtifactsOutput>
+  </PropertyGroup>
+
+</Project>

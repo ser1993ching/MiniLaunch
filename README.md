@@ -206,32 +206,33 @@ dotnet build
 ### 自检 / Self-test
 
 ```bash
-MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --selftest
+./artifacts/bin/MiniLaunch/debug/MiniLaunch.exe --selftest
 ```
 
-必须**全绿**（当前基线 **70 项通过**），退出码为 `0`。每次改动后请务必执行。
-Must be **all green** (current baseline: **70 assertions passed**) with exit code `0`. Run it after every change.
+必须**全绿**（当前基线 **82 项通过**），退出码为 `0`。每次改动后请务必执行。
+Must be **all green** (current baseline: **82 assertions passed**) with exit code `0`. Run it after every change.
 
 ```
-===== 自检结果: 通过 70 / 失败 0，耗时 1441ms =====
+===== 自检结果: 通过 82 / 失败 0，耗时 1441ms =====
 当前进程工作集: 1.3 MB
 ```
 
 ### 发布单文件 / Publish a single file
 
-> ⚠️ `-o` 必须给**纯 ASCII 绝对路径**（仓库目录名含中文，经 shell 包装器执行时路径会错位）。
-> ⚠️ The `-o` path must be **pure ASCII** — this repo's folder name contains Chinese characters.
+> 根目录 `Directory.Build.props` 把 bin/obj/publish 统一收进仓库内的 `artifacts/`，所以**不需要 `-o`**，也**不会往仓库外写任何东西**。
+> The root `Directory.Build.props` redirects bin/obj/publish into the in-repo `artifacts/` folder, so **no `-o` is needed** and nothing is written outside the repository.
 
 ```bash
-dotnet publish -c Release -r win-x64 --self-contained \
-  -p:PublishSingleFile=true -p:PublishTrimmed=true \
-  -o "E:\code\_tmp_publish"
+# 输出：artifacts/publish/MiniLaunch/release_win-x64/
+dotnet publish MiniLaunch/MiniLaunch.csproj -c Release -r win-x64 --self-contained \
+  -p:PublishSingleFile=true -p:PublishTrimmed=true
 
-cp /e/code/_tmp_publish/MiniLaunch.exe /e/code/_tmp_publish/MiniLaunch.pdb \
+cp artifacts/publish/MiniLaunch/release_win-x64/MiniLaunch.exe \
+   artifacts/publish/MiniLaunch/release_win-x64/MiniLaunch.pdb \
    "/e/code/启动器/publish/win-x64/"
 ```
 
-发布后核对：运行 `./MiniLaunch.exe --selftest`，应显示 **70 项通过**（拿到旧产物会显示 60/45/38）。
+发布后核对：运行 `./MiniLaunch.exe --selftest`，应显示 **82 项通过**（拿到旧产物会显示 70/60/45/38）。
 
 > 发布**不带** `PublishReadyToRun` —— SDK 的单文件打包器会重建宿主 exe 并丢弃图标资源（PE 里只剩 RCDATA/VERSION/MANIFEST）。
 > Do **not** enable `PublishReadyToRun` — the single-file bundler rebuilds the host executable and drops the embedded icon resource.
@@ -405,16 +406,15 @@ Press `Ctrl+Space`, type a few characters, hit `Enter`. Everything else is delib
 # build (Debug / JIT is enough for day-to-day work)
 cd MiniLaunch && dotnet build
 
-# headless self-test — must be all green (baseline: 70 assertions), exit code 0
-MiniLaunch/bin/Debug/net8.0-windows/MiniLaunch.exe --selftest
+# headless self-test — must be all green (baseline: 82 assertions), exit code 0
+./artifacts/bin/MiniLaunch/debug/MiniLaunch.exe --selftest
 
-# publish a self-contained, trimmed single file
-dotnet publish -c Release -r win-x64 --self-contained \
-  -p:PublishSingleFile=true -p:PublishTrimmed=true \
-  -o "E:\code\_tmp_publish"
+# publish a self-contained, trimmed single file (output: artifacts/publish/MiniLaunch/release_win-x64/)
+dotnet publish MiniLaunch/MiniLaunch.csproj -c Release -r win-x64 --self-contained \
+  -p:PublishSingleFile=true -p:PublishTrimmed=true
 ```
 
-> The `-o` path must be **pure ASCII** — this repository's directory name contains Chinese characters.
+> All build output (obj/bin/publish) stays inside the repository under `artifacts/` (see the root `Directory.Build.props`), so no `-o` is needed.
 > Do **not** enable `PublishReadyToRun`: the single-file bundler rebuilds the host executable and drops the embedded icon resource.
 
 ## Requirements

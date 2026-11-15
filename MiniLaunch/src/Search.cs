@@ -71,18 +71,22 @@ public sealed class SearchEngine
 
     int IdleCompare(Entry a, Entry b)
     {
-        // 自定义文件夹快捷入口置顶：「常用文件夹」要在呼出时一眼看到（用户专门配的入口）。
-        // 其余条目仍按 (使用次数, 最近使用) 排序，不受本规则影响。
-        int fa = (a.Source == EntrySource.Custom && a.IsFolder) ? 0 : 1;
-        int fb = (b.Source == EntrySource.Custom && b.IsFolder) ? 0 : 1;
-        if (fa != fb) return fa.CompareTo(fb);
-        // 先比次数、再比最近时间（设计：(Count, LastTicks) 字典序）。
-        // 不能把 Count 加权拼进一个 long：Ticks≈6.4e17，次数权重会被完全淹没，
-        // 退化成「最近使用」排序（历史 bug，自检有空查询回归断言）。
+        // 空查询（刚呼出）排序：
+        //   1) 使用次数降序
+        //   2) 次数相同时「自定义文件夹快捷入口」优先（不再无条件置顶，避免挤掉常用程序）
+        //   3) 最近使用时间降序
+        //   4) 名称序数比较兜底
+        // 设计沿革：早先把自定义文件夹无条件钉在第 0 组，用户配了 4~5 个文件夹时
+        // 首屏 8 行全被文件夹占满、常用程序（如 vdi/docker）被挤到看不见，故降为次级键。
+        // 注意：Count 不能加权拼进 Ticks——Ticks≈6.4e17，次数权重会被完全淹没
+        //（历史 bug，自检有空查询回归断言）。
         _usage.Recs.TryGetValue(a.UniqueKey, out var ra);
         _usage.Recs.TryGetValue(b.UniqueKey, out var rb);
         int ca = ra?.Count ?? 0, cb = rb?.Count ?? 0;
         if (ca != cb) return cb.CompareTo(ca);
+        int fa = (a.Source == EntrySource.Custom && a.IsFolder) ? 0 : 1;
+        int fb = (b.Source == EntrySource.Custom && b.IsFolder) ? 0 : 1;
+        if (fa != fb) return fa.CompareTo(fb);
         long la = ra?.LastTicks ?? 0, lb = rb?.LastTicks ?? 0;
         if (la != lb) return lb.CompareTo(la);
         return string.CompareOrdinal(a.NameLower, b.NameLower);
