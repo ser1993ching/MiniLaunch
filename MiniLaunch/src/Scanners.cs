@@ -26,7 +26,7 @@ public static class Scanners
             // 文件夹判定：配置里显式标记，或路径确实是一个存在的目录（兼容旧配置/拖入的目录）
             bool isFolder = c.IsFolder || Directory.Exists(path);
             list.Add(Make(name, path, c.Args?.Trim() ?? "", EntrySource.Custom,
-                iconRef: path, keywords: c.Keywords, workDir: c.WorkDir ?? "", runAs: c.RunAs,
+                iconRef: path, workDir: c.WorkDir ?? "", runAs: c.RunAs,
                 isFolder: isFolder));
         }
         return list;
@@ -48,7 +48,7 @@ public static class Scanners
             string name = string.IsNullOrWhiteSpace(w.Name) ? WebUrl.DefaultName(url) : w.Name.Trim();
             if (name.Length == 0) continue;
             list.Add(Make(name, url, "", EntrySource.Web,
-                iconRef: "", keywords: w.Keywords ?? "", isWeb: true));
+                iconRef: "", isWeb: true));
         }
         return list;
     }
@@ -353,7 +353,7 @@ public static class Scanners
 
     // ============ 条目构建 ============
     public static Entry Make(string name, string launchPath, string args, EntrySource src,
-        string iconRef, string keywords = "", string workDir = "", int iconIndex = 0, bool runAs = false,
+        string iconRef, string workDir = "", int iconIndex = 0, bool runAs = false,
         bool isFolder = false, bool isWeb = false)
     {
         var e = new Entry
@@ -377,7 +377,7 @@ public static class Scanners
         // 网站条目：检索串里放完整网址（域名/路径都能搜到），不放文件名
         string extra = isWeb ? " " + launchPath.ToLowerInvariant() : "";
         // 文件夹条目的检索串里已含目录自身的名字（fileLower = 目录名），别名不同也能搜到
-        e.HayLower = (e.NameLower + " " + alias + " " + (keywords ?? "").ToLowerInvariant() + " " + fileLower + " " + dirLower + extra).Trim();
+        e.HayLower = (e.NameLower + " " + alias + " " + fileLower + " " + dirLower + extra).Trim();
         e.UniqueKey = src + ":" + e.NameLower;
         // 网站没有「所在位置」可言；UWP 也没有
         e.RevealPath = (src == EntrySource.Uwp || isWeb) ? "" : launchPath;

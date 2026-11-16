@@ -123,7 +123,14 @@ public static class Program
         if (args.Contains("--web-dialog"))
         {
             _win.PreviewMode = true;
-            WebDialog.Show("添加网站", "百度", "https://www.baidu.com", "搜索", (n, u, k) => true);
+            WebDialog.Show("添加网站", "百度", "https://www.baidu.com",
+                () => new List<WebSiteEntry>
+                {
+                    new WebSiteEntry { Name = "百度", Url = "https://www.baidu.com" },
+                    new WebSiteEntry { Name = "GitHub", Url = "https://github.com" },
+                },
+                (n, u, t) => true,
+                url => { });
         }
         // 文件夹选择对话框预览（调试用）：选完直接进名称输入窗
         if (args.Contains("--pick-folder"))
@@ -339,14 +346,17 @@ public static class Program
     public static void PickAndAddWebSite(IntPtr owner)
     {
         if (WebDialog.IsOpen) return;
-        WebDialog.Show("添加网站", "", "", "", (name, url, kw) => AddWebSite(name, url, kw, ""));
+        WebDialog.Show("添加网站", "", "",
+            () => _cfg.Websites ??= new List<WebSiteEntry>(),
+            (name, url, target) => AddWebSite(name, url, target),
+            url => RemoveWebSite(url));
     }
 
     /// <summary>新增（或更新）一个网站快捷入口。oldUrl 非空时表示「编辑」该条目。</summary>
-    public static bool AddWebSite(string name, string url, string keywords, string oldUrl = "")
+    public static bool AddWebSite(string name, string url, string oldUrl = "")
     {
         _cfg.Websites ??= new List<WebSiteEntry>();
-        if (!WebSites.Upsert(_cfg.Websites, name, url, keywords, oldUrl)) return false;
+        if (!WebSites.Upsert(_cfg.Websites, name, url, oldUrl)) return false;
         ConfigStore.SaveConfig(_cfg);
         StartScan(true);
         return true;
@@ -356,16 +366,11 @@ public static class Program
     public static void EditWebSite(Entry e)
     {
         if (!e.IsWeb) return;
-        string url = e.LaunchPath;
-        string name = e.Name;
-        string kw = "";
-        foreach (var w in _cfg.Websites)
-        {
-            if (!WebUrl.Normalize(w.Url).Equals(WebUrl.Normalize(url), StringComparison.OrdinalIgnoreCase)) continue;
-            kw = w.Keywords ?? "";
-            break;
-        }
-        WebDialog.Show("编辑网站", name, url, kw, (n, u, k) => AddWebSite(n, u, k, url));
+        WebDialog.Show("编辑网站", e.Name, e.LaunchPath,
+            () => _cfg.Websites ??= new List<WebSiteEntry>(),
+            (name, url, target) => AddWebSite(name, url,
+                string.IsNullOrEmpty(target) ? e.LaunchPath : target),
+            url => RemoveWebSite(url));
     }
 
     /// <summary>删除一个网站快捷入口（右键菜单「删除网站」）。</summary>

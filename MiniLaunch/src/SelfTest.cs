@@ -145,7 +145,7 @@ public static class SelfTest
         {
             Hotkey = "Ctrl+Alt+P",
             AutoStart = true,
-            Custom = { new CustomEntry { Name = "测试程序", Path = @"C:\Windows\System32\notepad.exe", Keywords = "jsb note" } },
+            Custom = { new CustomEntry { Name = "测试程序", Path = @"C:\Windows\System32\notepad.exe" } },
         };
         ConfigStore.SaveConfig(cfg);
         var cfg2 = ConfigStore.LoadConfig();
@@ -280,8 +280,8 @@ public static class SelfTest
         {
             Websites =
             {
-                new WebSiteEntry { Name = "百度", Url = "www.baidu.com", Keywords = "搜索" },
-                new WebSiteEntry { Name = "GitHub", Url = "https://github.com/", Keywords = "代码 git" },
+                new WebSiteEntry { Name = "百度", Url = "www.baidu.com" },
+                new WebSiteEntry { Name = "GitHub", Url = "https://github.com/" },
                 new WebSiteEntry { Name = "无效站点", Url = "not a url" },
             },
         };
@@ -303,14 +303,13 @@ public static class SelfTest
             "网址取域名", WebUrl.HostOf("https://www.baidu.com/s?wd=x"));
         Check(WebUrl.DefaultName("https://www.taobao.com") == "taobao.com",
             "默认名称取域名（去 www.）", WebUrl.DefaultName("https://www.taobao.com"));
-        Check(WebUrl.Presets.Any(p => p.Url.Contains("baidu.com")), "常用站点预设含百度");
 
-        // 搜索：名称 / 拼音 / 域名 / 关键词 都能命中
+        // 搜索：名称 / 拼音 / 域名 都能命中（网站条目没有关键词属性）
         var engW = new SearchEngine(new UsageDb());
         engW.SetEntries(webEntries);
         Check(engW.Query("baidu", 5).Count == 1, "按域名搜索网站条目");
         Check(engW.Query("bd", 5) is { Count: 1 } qw && qw[0].Name == "百度", "拼音首字母搜索网站条目");
-        Check(engW.Query("搜索", 5).Count == 1, "按关键词搜索网站条目");
+        Check(engW.Query("百度", 5).Count == 1, "按名称搜索网站条目");
 
         // 合并优先级：网站条目压过同名的开始菜单条目
         var eWebSame = Scanners.Make("百度", "https://www.baidu.com", "", EntrySource.Web, "", isWeb: true);
@@ -324,30 +323,46 @@ public static class SelfTest
         Check(cfgNullW.Websites != null && cfgNullW.Websites.Count == 0, "配置 Websites=null 时自动补空列表");
         Check(Scanners.ScanWebsites(cfgNullW).Count == 0, "ScanWebsites 对空 Websites 列表安全");
 
-        // 网站编辑窗：按钮与预设标签的命中区
+        // 旧配置里的 Keywords 字段（自定义条目/网站条目）已移除：读取时应忽略而不是报错
+        File.WriteAllText(Paths.ConfigPath,
+            "{\"Hotkey\":\"Ctrl+Space\",\"Custom\":[{\"Name\":\"旧程序\",\"Path\":\"C:\\\\x\\\\a.exe\",\"Keywords\":\"旧关键词\"}]," +
+            "\"Websites\":[{\"Name\":\"百度\",\"Url\":\"https://www.baidu.com\",\"Keywords\":\"旧关键词\"}]}");
+        var cfgLegacyKw = ConfigStore.LoadConfig();
+        Check(cfgLegacyKw.Custom.Count == 1 && cfgLegacyKw.Websites.Count == 1,
+            "旧配置里的 Keywords 字段被忽略（不报错、不丢条目）");
+        Check(Scanners.ScanWebsites(cfgLegacyKw).Count == 1, "旧配置带 Keywords 的网站条目仍可扫描");
+
+        // 网站编辑窗：按钮与标签的命中区
         var wbl = WebDialog.ButtonLayout(470, 340, 1f);
         Check(wbl[0] >= 0 && wbl[4] + wbl[6] <= 470 && wbl[5] + wbl[7] <= 340,
             "网站编辑窗：按钮布局在窗口内（取消在左、确定在右）",
             $"cancel=({wbl[0]},{wbl[1]}) ok=({wbl[4]},{wbl[5]})");
         Check(WebDialog.HitButton(470, 340, 1f, wbl[4] + wbl[6] / 2, wbl[5] + wbl[7] / 2) == WebDialog.BtnOk,
             "网站编辑窗：点击「确定」按钮命中");
-        int chipW = WebDialog.ChipWidth(WebUrl.Presets[0].Name, 1f);
-        Check(WebDialog.HitPreset(470, 1f, 22 + chipW / 2, WebDialog.PresetTop(1f) + 10) == 0,
-            "网站编辑窗：常用站点标签命中");
-        Check(WebDialog.HitPreset(470, 1f, 5, 5) == -1, "网站编辑窗：空白处不误命中标签");
+        // 底部「已添加的网站」标签：布局不越界、删除区在最右
+        var tagSites = new List<WebSiteEntry>
+        {
+            new WebSiteEntry { Name = "百度", Url = "https://www.baidu.com" },
+            new WebSiteEntry { Name = "GitHub", Url = "https://github.com" },
+        };
+        var tags = WebDialog.BuildTags(tagSites, "https://www.baidu.com", 470, 1f);
+        Check(tags.Count == 2 && tags[0].IsCurrent && !tags[1].IsCurrent,
+            "网站编辑窗：标签按已添加的网站生成，当前编辑项高亮");
+        Check(tags.All(t => t.X >= 22 && t.X + t.W <= 470 - 22) && tags[1].X > tags[0].X,
+            "网站编辑窗：标签横向排列且不越界", $"x=[{string.Join(",", tags.Select(t => t.X))}]");
 
         // 网站条目的增删改（与 UI 解耦，直接验证）
         var wsList = new List<WebSiteEntry>();
-        Check(WebSites.Upsert(wsList, "百度", "www.baidu.com", "搜索"), "新增网站条目");
+        Check(WebSites.Upsert(wsList, "百度", "www.baidu.com"), "新增网站条目");
         Check(wsList.Count == 1 && wsList[0].Url == "https://www.baidu.com" && wsList[0].Name == "百度",
             "新增网站条目：网址自动补协议头", wsList.Count > 0 ? wsList[0].Url : "");
-        Check(WebSites.Upsert(wsList, "百度一下", "www.baidu.com", "搜索2"), "同一网址重复添加不新增条目");
-        Check(wsList.Count == 1 && wsList[0].Name == "百度一下" && wsList[0].Keywords == "搜索2",
-            "同一网址重复添加时覆盖名称与关键词");
-        Check(WebSites.Upsert(wsList, "淘宝", "https://www.taobao.com", ""), "新增第二个网站条目");
-        Check(!WebSites.Upsert(wsList, "旧名", "not a url", ""), "无效网址拒绝写入");
+        Check(WebSites.Upsert(wsList, "百度一下", "www.baidu.com"), "同一网址重复添加不新增条目");
+        Check(wsList.Count == 1 && wsList[0].Name == "百度一下",
+            "同一网址重复添加时覆盖名称");
+        Check(WebSites.Upsert(wsList, "淘宝", "https://www.taobao.com"), "新增第二个网站条目");
+        Check(!WebSites.Upsert(wsList, "旧名", "not a url"), "无效网址拒绝写入");
         Check(wsList.Count == 2, "无效网址不改变条目数", $"count={wsList.Count}");
-        Check(WebSites.Upsert(wsList, "淘宝商城", "https://www.taobao.com/x", "购物",
+        Check(WebSites.Upsert(wsList, "淘宝商城", "https://www.taobao.com/x",
                 "https://www.taobao.com"), "编辑网站条目（允许改网址）");
         Check(wsList.Count == 2 && wsList.Any(w => w.Url == "https://www.taobao.com/x" && w.Name == "淘宝商城"),
             "编辑网站条目生效");

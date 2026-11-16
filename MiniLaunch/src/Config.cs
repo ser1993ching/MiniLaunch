@@ -10,7 +10,6 @@ public class CustomEntry
     public string Args { get; set; } = "";
     public string WorkDir { get; set; } = "";
     public bool RunAs { get; set; }
-    public string Keywords { get; set; } = "";
     /// <summary>
     /// 是否为「文件夹」条目：回车直接进入该目录（资源管理器）。
     /// 旧配置没有这个字段时按默认值 false 处理；扫描时若路径确实是目录，会自动推断为文件夹。
@@ -28,8 +27,6 @@ public class WebSiteEntry
     public string Name { get; set; } = "";
     /// <summary>网址（保存前会用 WebUrl.Normalize 补全协议头）。</summary>
     public string Url { get; set; } = "";
-    /// <summary>别名关键词，用于搜索（如「购物」「代码托管」）。</summary>
-    public string Keywords { get; set; } = "";
 }
 
 public class AppConfig

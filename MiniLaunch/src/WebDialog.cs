@@ -3,21 +3,34 @@ using System.Text;
 
 namespace MiniLaunch;
 
-// 网站快捷入口编辑窗：添加 / 编辑一个常用网址（名称 + 网址 + 关键词）
+// 网站快捷入口编辑窗：添加 / 编辑一个常用网址（名称 + 网址）
 // 与 NameDialog 同一套风格：自绘窗口 + 原生 EDIT 子控件（IME 友好）+ 自绘按钮。
-// 顶部有一排「常用站点」快捷标签（百度 / 淘宝 / GitHub …），点一下自动填好名称与网址，
-// 但最终仍以用户自己填的内容为准（标签只是省去输入）。
+// 底部是「已添加的网站」标签行：点标签 = 把该网站填进表单继续编辑，点标签上的 × = 删除该网站。
 public sealed class WebDialog
 {
     const string ClassName = "MiniLaunchWebDlg";
-    const int EditName = 1, EditUrl = 2, EditKw = 3;
+    const int EditName = 1, EditUrl = 2;
 
     /// <summary>按钮索引。</summary>
     public const int BtnCancel = 0;
     public const int BtnOk = 1;
 
-    /// <summary>预设标签的命中编号基址（>=100，避免与按钮编号冲突）。</summary>
-    public const int ChipHitBase = 100;
+    /// <summary>标签行的命中编号基址（>=100，避免与按钮编号冲突）。</summary>
+    public const int TagHitBase = 100;
+
+    /// <summary>标签上「×」删除区的命中编号基址（>=200）。</summary>
+    public const int TagDelBase = 200;
+
+    /// <summary>已添加网站标签（用于绘制与命中测试）。</summary>
+    public sealed class TagItem
+    {
+        public string Name = "";
+        public string Url = "";
+        public int X, W;        // 客户坐标
+        public int Row;
+        public bool IsCurrent;  // 正在编辑的那一个
+        public int DelW;        // 「×」区宽度
+    }
 
     static readonly Win32.WndProcDelegate s_wndProc = WndProcStatic;
     static readonly Win32.SubclassProcDelegate s_editProc = EditProcStatic;
@@ -27,33 +40,46 @@ public sealed class WebDialog
     public static bool IsOpen => s_this != null;
 
     public IntPtr Hwnd;
-    IntPtr _editName, _editUrl, _editKw;
+    IntPtr _editName, _editUrl;
 
-    readonly string _title;
-    /// <summary>确认回调：(名称, 网址, 关键词) → true 表示接受并关闭。</summary>
+    string _title;
+    /// <summary>确认回调：(名称, 网址, 目标网址) → true 表示接受并关闭。目标网址为空表示新增。</summary>
     readonly Func<string, string, string, bool> _onOk;
+    /// <summary>取当前已添加的网站列表（绘制与命中测试时实时取，删除后自动刷新）。</summary>
+    readonly Func<List<WebSiteEntry>> _listProvider;
+    /// <summary>删除某个网站（按网址）。</summary>
+    readonly Action<string> _onDelete;
+
+    /// <summary>当前正在编辑的网站网址（空 = 新增）。</summary>
+    string _currentUrl = "";
 
     float _scale = 1f;
-    int _w, _h, _pad, _editH;
-    IntPtr _fontTitle, _fontHint, _fontEdit, _fontSmall, _fontBtn, _brushEditBg, _brushBorder;
+    int _w, _h, _pad, _boxH, _editH;
+    IntPtr _fontTitle, _fontHint, _fontEdit, _fontSmall, _fontBtn;
+    IntPtr _brushEditBg, _brushBorder, _brushSurface;
     string _error = "";
 
-    int _hover = -1;      // 鼠标悬停的按钮（-2 起为预设标签）
+    int _hover = -1;      // 鼠标悬停的目标（按钮 / 标签 / 删除区）
     int _pressed = -1;
 
-    WebDialog(string title, Func<string, string, string, bool> onOk)
+    WebDialog(string title, Func<List<WebSiteEntry>> listProvider,
+        Func<string, string, string, bool> onOk, Action<string> onDelete)
     {
         _title = title;
+        _listProvider = listProvider;
         _onOk = onOk;
+        _onDelete = onDelete;
     }
 
     /// <summary>弹出网站编辑框。initial* 为初始内容；onOk 返回 true 才关闭。</summary>
-    public static void Show(string title, string name, string url, string keywords,
-        Func<string, string, string, bool> onOk)
+    public static void Show(string title, string name, string url,
+        Func<List<WebSiteEntry>> listProvider,
+        Func<string, string, string, bool> onOk,
+        Action<string> onDelete)
     {
         if (s_this != null) { Win32.SetForegroundWindow(s_this.Hwnd); return; }
 
-        var self = new WebDialog(title, onOk);
+        var self = new WebDialog(title, listProvider, onOk, onDelete);
         s_this = self;
         self.RecalcMetrics(1f);
 
@@ -86,10 +112,10 @@ public sealed class WebDialog
         Win32.SetForegroundWindow(hwnd);
         Win32.SetWindowTextW(self._editName, name ?? "");
         Win32.SetWindowTextW(self._editUrl, url ?? "");
-        Win32.SetWindowTextW(self._editKw, keywords ?? "");
-        // 光标默认落在「网址」上：名称可以留空（自动取域名）
-        Win32.SetFocus(self._editUrl);
-        Win32.SendMessageW(self._editUrl, Win32.EM_SETSEL, IntPtr.Zero, (IntPtr)(-1));
+        // 有网址说明是「编辑」已有条目
+        self._currentUrl = string.IsNullOrEmpty(url) ? "" : url;
+        Win32.SetFocus(self._editName);
+        Win32.SendMessageW(self._editName, Win32.EM_SETSEL, IntPtr.Zero, (IntPtr)(-1));
     }
 
     // ================= 布局 =================
@@ -99,50 +125,71 @@ public sealed class WebDialog
         _w = Scale(470);
         _h = Scale(340);
         _pad = Scale(22);
-        _editH = Scale(30);
+        _boxH = Scale(30);   // 输入框（描边圆角）高度
+        _editH = Scale(21);  // 真正的 EDIT 控件高度：单行 EDIT 的文字贴客户区顶部，控件本身要矮一点才居中
     }
 
     int Scale(int v) => (int)Math.Round(v * _scale);
 
-    /// <summary>预设标签行（常用站点快捷填入）的高度与起点。</summary>
-    public static int PresetTop(float scale) => (int)Math.Round(22 * scale) + (int)Math.Round(32 * scale);
+    // 各区块的 y 坐标（客户坐标，96 DPI 基准）
+    int LabelY1 => _pad + Scale(38);      // 「名称」标签
+    int BoxY1 => LabelY1 + Scale(18);     // 名称输入框
+    int LabelY2 => BoxY1 + _boxH + Scale(10);
+    int BoxY2 => LabelY2 + Scale(18);     // 网址输入框
+    int TagLabelY => BoxY2 + _boxH + Scale(10);
+    int TagRow0Y => TagLabelY + Scale(20);
+    int TagRowH => Scale(26);
+    int TagRowGap => Scale(6);
+    int ErrorY => TagRow0Y + (TagRowH + TagRowGap) * 2 + Scale(2);
 
-    /// <summary>预设标签宽度：中文按 13px/字，其余按 7px/字估算（自检用）。</summary>
-    public static int ChipWidth(string text, float scale)
+    /// <summary>标签最多显示几行。</summary>
+    public const int TagMaxRows = 2;
+
+    /// <summary>文字宽度估算（中文 12px/字，其余 7px/字）：绘制与命中测试共用同一套算法。</summary>
+    public static int ApproxWidth(string text, float scale)
     {
         int w = 0;
-        foreach (char c in text) w += c > 0x2E80 ? 13 : 7;
-        return (int)Math.Round((w + 20) * scale);
+        foreach (char c in text) w += c > 0x2E80 ? 12 : 7;
+        return (int)Math.Round(w * scale);
     }
 
-    /// <summary>预设标签的 x 坐标序列（从 pad 起，间距 8px）。</summary>
-    public static int[] PresetLayout(float scale)
+    /// <summary>按当前网站列表生成标签布局（绘制与命中测试共用）。</summary>
+    public static List<TagItem> BuildTags(IReadOnlyList<WebSiteEntry> sites, string currentUrl,
+        int clientW, float scale)
     {
+        var res = new List<TagItem>();
+        if (sites == null) return res;
         int pad = (int)Math.Round(22 * scale);
-        int gap = (int)Math.Round(8 * scale);
-        var res = new List<int>();
+        int gap = (int)Math.Round(6 * scale);
+        int delW = (int)Math.Round(20 * scale);
         int x = pad;
-        foreach (var p in WebUrl.Presets)
+        int row = 0;
+        foreach (var s in sites)
         {
-            res.Add(x);
-            x += ChipWidth(p.Name, scale) + gap;
+            string nm = string.IsNullOrWhiteSpace(s.Name) ? WebUrl.DefaultName(s.Url) : s.Name.Trim();
+            if (nm.Length == 0) continue;
+            int w = ApproxWidth(nm, scale) + delW + (int)Math.Round(14 * scale);
+            if (x + w > clientW - pad)
+            {
+                row++;
+                x = pad;
+                if (row >= TagMaxRows) break;   // 放不下就不再显示（不滚动，避免复杂交互）
+            }
+            bool cur = !string.IsNullOrEmpty(currentUrl) &&
+                       WebUrl.Normalize(s.Url).Equals(WebUrl.Normalize(currentUrl), StringComparison.OrdinalIgnoreCase);
+            res.Add(new TagItem
+            {
+                Name = nm,
+                Url = s.Url ?? "",
+                X = x,
+                W = w,
+                Row = row,
+                IsCurrent = cur,
+                DelW = delW,
+            });
+            x += w + gap;
         }
-        return res.ToArray();
-    }
-
-    /// <summary>命中测试：点在某个预设标签上返回其序号，否则 -1。</summary>
-    public static int HitPreset(int clientW, float scale, int mx, int my)
-    {
-        int top = PresetTop(scale);
-        int h = (int)Math.Round(26 * scale);
-        if (my < top || my >= top + h) return -1;
-        var xs = PresetLayout(scale);
-        for (int i = 0; i < xs.Length && i < WebUrl.Presets.Length; i++)
-        {
-            int w = ChipWidth(WebUrl.Presets[i].Name, scale);
-            if (mx >= xs[i] && mx < xs[i] + w) return i;
-        }
-        return -1;
+        return res;
     }
 
     /// <summary>底部按钮布局（客户端坐标）：[x, y, w, h] × 2，顺序：取消、确定。</summary>
@@ -171,15 +218,6 @@ public sealed class WebDialog
         return -1;
     }
 
-    /// <summary>统一命中测试：按钮优先，其次是预设标签；都没有则 -1。</summary>
-    int HitAt(int mx, int my)
-    {
-        int hit = HitButton(_w, _h, _scale, mx, my);
-        if (hit >= 0) return hit;
-        int chip = HitPreset(_w, _scale, mx, my);
-        return chip >= 0 ? ChipHitBase + chip : -1;
-    }
-
     void CreateFonts()
     {
         _fontTitle = MakeFont(16, Win32.FW_SEMIBOLD);
@@ -189,6 +227,7 @@ public sealed class WebDialog
         _fontBtn = MakeFont(13, Win32.FW_NORMAL);
         _brushEditBg = Win32.CreateSolidBrush(Theme.Surface);
         _brushBorder = Win32.CreateSolidBrush(Theme.SurfaceBorder);
+        _brushSurface = Win32.CreateSolidBrush(Theme.Surface);
     }
 
     IntPtr MakeFont(int px, int weight) =>
@@ -201,8 +240,9 @@ public sealed class WebDialog
         foreach (var f in new[] { _fontTitle, _fontHint, _fontEdit, _fontSmall, _fontBtn })
             if (f != IntPtr.Zero) Win32.DeleteObject(f);
         _fontTitle = _fontHint = _fontEdit = _fontSmall = _fontBtn = IntPtr.Zero;
-        if (_brushEditBg != IntPtr.Zero) { Win32.DeleteObject(_brushEditBg); _brushEditBg = IntPtr.Zero; }
-        if (_brushBorder != IntPtr.Zero) { Win32.DeleteObject(_brushBorder); _brushBorder = IntPtr.Zero; }
+        foreach (var b in new IntPtr[] { _brushEditBg, _brushBorder, _brushSurface })
+            if (b != IntPtr.Zero) Win32.DeleteObject(b);
+        _brushEditBg = _brushBorder = _brushSurface = IntPtr.Zero;
     }
 
     // ================= 窗口过程 =================
@@ -226,7 +266,6 @@ public sealed class WebDialog
                 IntPtr hinst = Win32.GetModuleHandleW(null);
                 _editName = MakeEdit(h, EditName, "名称（留空则用域名）");
                 _editUrl = MakeEdit(h, EditUrl, "网址，如 https://www.baidu.com");
-                _editKw = MakeEdit(h, EditKw, "关键词（可选，用于搜索）");
                 LayoutEdits();
 
                 // 窗口按 96 DPI 创建：高 DPI 下撑到重算后的尺寸，并在光标所在显示器居中
@@ -268,7 +307,7 @@ public sealed class WebDialog
 
             case Win32.WM_CTLCOLOREDIT:
                 // wParam 是 HDC，lParam 才是控件句柄（写反会让 EDIT 变白底）
-                if (l == _editName || l == _editUrl || l == _editKw)
+                if (l == _editName || l == _editUrl)
                 {
                     Win32.SetTextColor(w, (int)Theme.TextMain);
                     Win32.SetBkColor(w, (int)Theme.Surface);
@@ -286,7 +325,7 @@ public sealed class WebDialog
             case Win32.WM_COMMAND:
                 // 用户开始输入后清掉上一次的错误提示
                 if (Win32.HIWORD(w) == Win32.EN_CHANGE && _error.Length > 0 &&
-                    (Win32.LOWORD(w) == EditName || Win32.LOWORD(w) == EditUrl || Win32.LOWORD(w) == EditKw))
+                    (Win32.LOWORD(w) == EditName || Win32.LOWORD(w) == EditUrl))
                 {
                     _error = "";
                     Win32.InvalidateRect(h, IntPtr.Zero, false);
@@ -347,7 +386,8 @@ public sealed class WebDialog
                 {
                     if (hit == BtnOk) Commit();
                     else if (hit == BtnCancel) Close();
-                    else if (hit >= ChipHitBase) ApplyPreset(hit - ChipHitBase);
+                    else if (hit >= TagDelBase) DeleteTag(hit - TagDelBase);
+                    else if (hit >= TagHitBase) PickTag(hit - TagHitBase);
                 }
                 return IntPtr.Zero;
             }
@@ -385,19 +425,21 @@ public sealed class WebDialog
 
     void Close() => Win32.DestroyWindow(Hwnd);
 
-    /// <summary>三个输入框的纵向位置（客户端坐标）。</summary>
+    /// <summary>
+    /// 两个输入框的摆放。单行 EDIT 的文字永远贴客户区顶部（EM_SETRECT 只对多行有效），
+    /// 要让文字在框里视觉居中，只能把控件本身做矮（行高）并往下挪一点（见坑 #16）。
+    /// </summary>
     void LayoutEdits()
     {
-        int labelY = _pad + Scale(74);
-        int editY = labelY + Scale(18);
-        PlaceEdit(_editName, editY);
-        PlaceEdit(_editUrl, editY + Scale(58));
-        PlaceEdit(_editKw, editY + Scale(116));
+        PlaceEdit(_editName, BoxY1);
+        PlaceEdit(_editUrl, BoxY2);
     }
 
-    void PlaceEdit(IntPtr edit, int top)
+    void PlaceEdit(IntPtr edit, int boxY)
     {
         if (edit == IntPtr.Zero) return;
+        // 控件高 = 行高，顶部比框顶低 3px：文字（控件顶部往下约 3px 起）正好落在框的垂直中线
+        int top = boxY + Scale(3);
         Win32.MoveWindow(edit, _pad, top, _w - _pad * 2, _editH, true);
         if (_fontEdit != IntPtr.Zero)
             Win32.SendMessageW(edit, Win32.WM_SETFONT, _fontEdit, (IntPtr)1);
@@ -406,15 +448,72 @@ public sealed class WebDialog
             (IntPtr)(Win32.EC_LEFTMARGIN | Win32.EC_RIGHTMARGIN), (IntPtr)((mg << 16) | (mg & 0xFFFF)));
     }
 
-    /// <summary>点击预设标签：把名称与网址填进去（不直接保存，仍需点「确定」）。</summary>
-    void ApplyPreset(int index)
+    /// <summary>取当前已添加的网站列表。</summary>
+    List<WebSiteEntry> CurrentSites()
     {
-        if (index < 0 || index >= WebUrl.Presets.Length) return;
-        var p = WebUrl.Presets[index];
-        Win32.SetWindowTextW(_editName, p.Name);
-        Win32.SetWindowTextW(_editUrl, p.Url);
-        Win32.SetFocus(_editUrl);
-        Win32.SendMessageW(_editUrl, Win32.EM_SETSEL, IntPtr.Zero, (IntPtr)(-1));
+        try { return _listProvider() ?? new List<WebSiteEntry>(); }
+        catch { return new List<WebSiteEntry>(); }
+    }
+
+    /// <summary>统一命中测试：按钮优先，其次是标签；都没有则 -1。</summary>
+    int HitAt(int mx, int my)
+    {
+        int hit = HitButton(_w, _h, _scale, mx, my);
+        if (hit >= 0) return hit;
+        var tags = BuildTags(CurrentSites(), _currentUrl, _w, _scale);
+        int rowH = TagRowH + TagRowGap;
+        for (int i = 0; i < tags.Count; i++)
+        {
+            int y0 = TagRow0Y + tags[i].Row * rowH;
+            if (my < y0 || my >= y0 + TagRowH) continue;
+            if (mx < tags[i].X || mx >= tags[i].X + tags[i].W) continue;
+            return (mx >= tags[i].X + tags[i].W - tags[i].DelW) ? TagDelBase + i : TagHitBase + i;
+        }
+        return -1;
+    }
+
+    /// <summary>点标签：把该网站填进表单（继续编辑它）。</summary>
+    void PickTag(int index)
+    {
+        var tags = BuildTags(CurrentSites(), _currentUrl, _w, _scale);
+        if (index < 0 || index >= tags.Count) return;
+        var t = tags[index];
+        string name = t.Name;
+        string url = t.Url;
+        foreach (var s in CurrentSites())
+        {
+            if (!WebUrl.Normalize(s.Url).Equals(WebUrl.Normalize(url), StringComparison.OrdinalIgnoreCase)) continue;
+            if (!string.IsNullOrWhiteSpace(s.Name)) name = s.Name;
+            break;
+        }
+        _currentUrl = url;
+        _title = "编辑网站";
+        Win32.SetWindowTextW(Hwnd, _title);
+        Win32.SetWindowTextW(_editName, name);
+        Win32.SetWindowTextW(_editUrl, url);
+        Win32.SetFocus(_editName);
+        Win32.SendMessageW(_editName, Win32.EM_SETSEL, IntPtr.Zero, (IntPtr)(-1));
+        Win32.InvalidateRect(Hwnd, IntPtr.Zero, true);
+    }
+
+    /// <summary>点标签上的「×」：删除该网站。</summary>
+    void DeleteTag(int index)
+    {
+        var tags = BuildTags(CurrentSites(), _currentUrl, _w, _scale);
+        if (index < 0 || index >= tags.Count) return;
+        string url = tags[index].Url;
+        try { _onDelete(url); } catch { }
+        if (!string.IsNullOrEmpty(_currentUrl) &&
+            WebUrl.Normalize(_currentUrl).Equals(WebUrl.Normalize(url), StringComparison.OrdinalIgnoreCase))
+        {
+            // 删掉的正是正在编辑的那一个：表单清空，回到「新增」状态
+            _currentUrl = "";
+            _title = "添加网站";
+            Win32.SetWindowTextW(Hwnd, _title);
+            Win32.SetWindowTextW(_editName, "");
+            Win32.SetWindowTextW(_editUrl, "");
+        }
+        Win32.InvalidateRect(Hwnd, IntPtr.Zero, true);
     }
 
     // ================= 输入 =================
@@ -437,9 +536,8 @@ public sealed class WebDialog
         }
         string name = ReadText(_editName);
         if (name.Length == 0) name = WebUrl.DefaultName(url);   // 名称留空 → 自动取域名
-        string kw = ReadText(_editKw);
         bool ok;
-        try { ok = _onOk(name, url, kw); }
+        try { ok = _onOk(name, url, _currentUrl); }
         catch { ok = false; }
         if (ok) { Close(); return; }
         Win32.InvalidateRect(Hwnd, IntPtr.Zero, false);
@@ -469,23 +567,19 @@ public sealed class WebDialog
             var rTitle = new Win32.RECT { L = _pad, T = _pad, R = cx - _pad, B = _pad + Scale(24) };
             Win32.DrawTextW(mem, _title, -1, ref rTitle, Theme.AlignLeft);
 
-            // 预设标签
-            DrawPresets(mem, cx);
+            // 两个字段
+            DrawField(mem, cx, LabelY1, BoxY1, "名称");
+            DrawField(mem, cx, LabelY2, BoxY2, "网址");
 
-            // 三个字段的标签 + 输入框描边
-            int labelY = _pad + Scale(74);
-            int editY = labelY + Scale(18);
-            DrawField(mem, cx, labelY, editY, "名称", _editName);
-            DrawField(mem, cx, labelY + Scale(58), editY + Scale(58), "网址", _editUrl);
-            DrawField(mem, cx, labelY + Scale(116), editY + Scale(116), "关键词（可选）", _editKw);
+            // 底部：已添加的网站（标签行）
+            DrawTags(mem, cx);
 
             // 错误提示
             if (_error.Length > 0)
             {
                 Win32.SelectObject(mem, _fontSmall);
                 Win32.SetTextColor(mem, (int)Theme.Warn);
-                int ey = editY + Scale(116) + _editH + Scale(8);
-                var rErr = new Win32.RECT { L = _pad, T = ey, R = cx - _pad, B = ey + Scale(16) };
+                var rErr = new Win32.RECT { L = _pad, T = ErrorY, R = cx - _pad, B = ErrorY + Scale(16) };
                 Win32.DrawTextW(mem, _error, -1, ref rErr, Theme.AlignLeft);
             }
 
@@ -512,52 +606,71 @@ public sealed class WebDialog
         }
     }
 
-    /// <summary>画一排「常用站点」快捷标签。</summary>
-    void DrawPresets(IntPtr hdc, int cx)
+    /// <summary>画一排「已添加的网站」标签：点标签=编辑，点 ×=删除。</summary>
+    void DrawTags(IntPtr hdc, int cx)
     {
-        int top = PresetTop(_scale);
-        int h = Scale(26);
-        var xs = PresetLayout(_scale);
         Win32.SelectObject(hdc, _fontSmall);
-        for (int i = 0; i < WebUrl.Presets.Length && i < xs.Length; i++)
+        Win32.SetTextColor(hdc, (int)Theme.TextDim);
+        var rLabel = new Win32.RECT { L = _pad, T = TagLabelY, R = cx - _pad, B = TagLabelY + Scale(18) };
+        Win32.DrawTextW(hdc, "已添加的网站（点标签编辑，点 × 删除）", -1, ref rLabel, Theme.AlignLeft);
+
+        var tags = BuildTags(CurrentSites(), _currentUrl, cx, _scale);
+        if (tags.Count == 0)
         {
-            string name = WebUrl.Presets[i].Name;
-            int w = ChipWidth(name, _scale);
-            int x = xs[i];
-            bool hover = _hover == ChipHitBase + i;
-            bool pressed = _pressed == ChipHitBase + i;
-            var rc = new Win32.RECT { L = x, T = top + (pressed ? 1 : 0), R = x + w, B = top + h + (pressed ? 1 : 0) };
+            Win32.SelectObject(hdc, _fontHint);
+            Win32.SetTextColor(hdc, (int)Theme.TextDim);
+            var rNone = new Win32.RECT { L = _pad, T = TagRow0Y, R = cx - _pad, B = TagRow0Y + TagRowH };
+            Win32.DrawTextW(hdc, "（还没有添加网站）", -1, ref rNone, Theme.AlignLeft);
+            return;
+        }
+
+        int rowH = TagRowH + TagRowGap;
+        for (int i = 0; i < tags.Count; i++)
+        {
+            var t = tags[i];
+            int y = TagRow0Y + t.Row * rowH;
+            bool hover = _hover == TagHitBase + i || _hover == TagDelBase + i;
+            bool hoverDel = _hover == TagDelBase + i;
+            bool pressed = _pressed == TagHitBase + i || _pressed == TagDelBase + i;
+
             uint bg = pressed ? Win32.Rgb(0x2C, 0x3A, 0x66) : (hover ? Win32.Rgb(0x33, 0x3F, 0x6B) : Win32.Rgb(0x2C, 0x2F, 0x3A));
-            IntPtr brBg = Win32.CreateSolidBrush(bg);
-            Theme.FillRoundSolid(hdc, rc, Scale(7), brBg);
-            Win32.DeleteObject(brBg);
-            IntPtr brBorder = Win32.CreateSolidBrush(hover ? Theme.Accent : Theme.SurfaceBorder);
+            // 先画描边（外圈），再画底色（内圈）：反过来会把底色整个盖掉
+            IntPtr brBorder = Win32.CreateSolidBrush(t.IsCurrent ? Theme.Accent : (hover ? Theme.Accent : Theme.SurfaceBorder));
+            var rc = new Win32.RECT { L = t.X, T = y, R = t.X + t.W, B = y + TagRowH };
             var outer = new Win32.RECT { L = rc.L - 1, T = rc.T - 1, R = rc.R + 1, B = rc.B + 1 };
             Theme.FillRoundSolid(hdc, outer, Scale(7) + 1, brBorder);
             Win32.DeleteObject(brBorder);
+            IntPtr brBg = Win32.CreateSolidBrush(bg);
+            Theme.FillRoundSolid(hdc, rc, Scale(7), brBg);
+            Win32.DeleteObject(brBg);
 
-            Win32.SetTextColor(hdc, (int)(hover ? Theme.TextMain : Theme.TextSub));
-            var tr = new Win32.RECT { L = rc.L, T = rc.T, R = rc.R, B = rc.B };
-            Win32.DrawTextW(hdc, name, -1, ref tr, Theme.AlignCenter);
+            // 名称
+            Win32.SelectObject(hdc, _fontSmall);
+            Win32.SetTextColor(hdc, (int)((hover || t.IsCurrent) ? Theme.TextMain : Theme.TextSub));
+            var tr = new Win32.RECT { L = t.X + Scale(9), T = y, R = t.X + t.W - t.DelW, B = y + TagRowH };
+            Win32.DrawTextW(hdc, t.Name, -1, ref tr, Theme.AlignLeft);
+
+            // 删除 ×
+            Win32.SelectObject(hdc, _fontSmall);
+            Win32.SetTextColor(hdc, (int)(hoverDel ? Theme.Warn : Theme.TextDim));
+            var dr = new Win32.RECT { L = t.X + t.W - t.DelW, T = y, R = t.X + t.W, B = y + TagRowH };
+            Win32.DrawTextW(hdc, "×", -1, ref dr, Theme.AlignCenter);
         }
     }
 
-    /// <summary>画一个字段：上方小标签 + 输入框描边。</summary>
-    void DrawField(IntPtr hdc, int cx, int labelY, int editY, string label, IntPtr edit)
+    /// <summary>画一个字段：上方小标签 + 输入框（描边圆角 + 底色）。</summary>
+    void DrawField(IntPtr hdc, int cx, int labelY, int boxY, string label)
     {
         Win32.SelectObject(hdc, _fontHint);
         Win32.SetTextColor(hdc, (int)Theme.TextSub);
         var rLabel = new Win32.RECT { L = _pad, T = labelY, R = cx - _pad, B = labelY + Scale(18) };
         Win32.DrawTextW(hdc, label, -1, ref rLabel, Theme.AlignLeft);
 
-        var box = new Win32.RECT
-        {
-            L = _pad - 1,
-            T = editY - 1,
-            R = cx - _pad + 1,
-            B = editY + _editH + 1,
-        };
-        Theme.FillRoundSolid(hdc, box, Scale(8), _brushBorder);
+        // 外圈描边 + 内圈底色：EDIT 控件比框矮（文字要居中），中间的空隙得由底色补上
+        var outer = new Win32.RECT { L = _pad - 1, T = boxY - 1, R = cx - _pad + 1, B = boxY + _boxH + 1 };
+        Theme.FillRoundSolid(hdc, outer, Scale(8) + 1, _brushBorder);
+        var inner = new Win32.RECT { L = _pad, T = boxY, R = cx - _pad, B = boxY + _boxH };
+        Theme.FillRoundSolid(hdc, inner, Scale(8), _brushSurface);
     }
 
     /// <summary>画一个自绘按钮（主按钮用渐变，次按钮用描边）。</summary>
@@ -614,10 +727,10 @@ public sealed class WebDialog
         return Win32.DefSubclassProc(h, msg, w, l);
     }
 
-    /// <summary>Tab 在三个输入框之间轮转（普通窗口没有对话框管理器的默认焦点切换）。</summary>
+    /// <summary>Tab 在两个输入框之间轮转（普通窗口没有对话框管理器的默认焦点切换）。</summary>
     void FocusNext(IntPtr cur)
     {
-        IntPtr next = cur == _editName ? _editUrl : (cur == _editUrl ? _editKw : _editName);
+        IntPtr next = cur == _editName ? _editUrl : _editName;
         if (next != IntPtr.Zero)
         {
             Win32.SetFocus(next);

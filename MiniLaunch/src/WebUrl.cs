@@ -6,16 +6,6 @@
 /// </summary>
 public static class WebUrl
 {
-    /// <summary>常用站点预设（点一下就填进对话框，用户仍可改名/改网址）。</summary>
-    public static readonly (string Name, string Url)[] Presets =
-    {
-        ("百度", "https://www.baidu.com"),
-        ("淘宝", "https://www.taobao.com"),
-        ("GitHub", "https://github.com"),
-        ("知乎", "https://www.zhihu.com"),
-        ("哔哩哔哩", "https://www.bilibili.com"),
-    };
-
     /// <summary>补全协议头：没写协议时按 https 处理；//host 形式补成 https://host。</summary>
     public static string Normalize(string? raw)
     {
@@ -75,7 +65,7 @@ public static class WebUrl
 public static class WebSites
 {
     /// <summary>新增或更新一条网站快捷入口。oldUrl 非空时表示编辑该条目（允许改网址）。</summary>
-    public static bool Upsert(List<WebSiteEntry> list, string name, string url, string keywords, string oldUrl = "")
+    public static bool Upsert(List<WebSiteEntry> list, string name, string url, string oldUrl = "")
     {
         string u = WebUrl.Normalize(url);
         if (!WebUrl.IsValid(u)) return false;
@@ -90,17 +80,16 @@ public static class WebSites
         }
         if (target == null)
         {
-            // 同一网址只保留一条：重复添加时改为覆盖名称/关键词
+            // 同一网址只保留一条：重复添加时改为覆盖名称
             foreach (var w in list)
                 if (WebUrl.Normalize(w.Url).Equals(u, StringComparison.OrdinalIgnoreCase)) { target = w; break; }
         }
         if (target == null)
-            list.Add(new WebSiteEntry { Name = nm, Url = u, Keywords = keywords ?? "" });
+            list.Add(new WebSiteEntry { Name = nm, Url = u });
         else
         {
             target.Name = nm;
             target.Url = u;
-            target.Keywords = keywords ?? "";
         }
         return true;
     }

@@ -100,7 +100,7 @@ The table below shows **measured numbers** (Windows 10/11, Release self-containe
 | **图标缓存** | Icon cache | 图标在**后台线程**提取，UI 绘制只读缓存；LRU 保留 64 项 HICON，驱逐时销毁 |
 | **拖放添加** | Drag & drop | 把 exe / 快捷方式拖进窗口，立即添加为自定义条目并持久化 |
 | **文件夹快速启动** | Folder shortcuts | 托盘菜单「添加文件夹…」选目录并起名，回车直接进目录；常用文件夹在空查询时置顶 |
-| **网站快速访问** | Website shortcuts | 托盘菜单「添加网站…」自定义常用网址（百度 / 淘宝 / GitHub…），回车用默认浏览器打开；支持名称、网址、关键词，支持拼音搜索与右键编辑/删除 |
+| **网站快速访问** | Website shortcuts | 托盘菜单「添加网站…」自定义常用网址（名称 + 网址，回车用默认浏览器打开）；窗口底部以 tag 形式列出已添加的网站（点标签编辑，点 × 删除）；支持名称 / 拼音 / 域名搜索 |
 | **使用频率排序** | Usage-based ranking | 最近 24 小时用过的条目额外加权，常用程序自然浮到前面 |
 | **托盘菜单** | Tray menu | 设置热键 / 添加程序 / 重新扫描 / 开机自启 / 退出 |
 | **开机自启** | Auto-start | 可选开机常驻；启动时分两阶段扫描，开机不占启动资源 |
@@ -173,9 +173,9 @@ Opened from the tray menu; the new combo applies immediately, `Esc` cancels.
 ### 5. 网站快速访问 · Website shortcuts
 
 上：搜索 `baidu` 命中自建网站条目（地球图标 + 「网站」标记），回车用默认浏览器打开。
-下：托盘菜单「添加网站…」的编辑窗，顶部是「百度 / 淘宝 / GitHub / 知乎 / 哔哩哔哩」快捷标签，一点即填。
 Top: searching `baidu` hits your own website entry (globe icon + "网站" tag); `Enter` opens it in the default browser.
-Bottom: the *Add website…* dialog with one-click presets for Baidu / Taobao / GitHub / Zhihu / Bilibili.
+下：托盘菜单「添加网站…」的编辑窗（名称 + 网址，底部是已添加网站的 tag 列表：点标签编辑，点 × 删除）。
+Bottom: the *Add website…* dialog — name + URL, with the already-added websites as tags at the bottom (click a tag to edit it, click × to delete it).
 
 <p align="center">
   <img src="docs/screenshots/main-web.png" width="520" alt="Website entry in the result list" />
@@ -229,11 +229,11 @@ dotnet build
 ./artifacts/bin/MiniLaunch/debug/MiniLaunch.exe --selftest
 ```
 
-必须**全绿**（当前基线 **126 项通过**），退出码为 `0`。每次改动后请务必执行。
-Must be **all green** (current baseline: **126 assertions passed**) with exit code `0`. Run it after every change.
+必须**全绿**（当前基线 **127 项通过**），退出码为 `0`。每次改动后请务必执行。
+Must be **all green** (current baseline: **127 assertions passed**) with exit code `0`. Run it after every change.
 
 ```
-===== 自检结果: 通过 126 / 失败 0，耗时 1441ms =====
+===== 自检结果: 通过 127 / 失败 0，耗时 1441ms =====
 当前进程工作集: 1.3 MB
 ```
 
@@ -252,7 +252,7 @@ cp artifacts/publish/MiniLaunch/release_win-x64/MiniLaunch.exe \
    "/e/code/启动器/publish/win-x64/"
 ```
 
-发布后核对：运行 `./MiniLaunch.exe --selftest`，应显示 **126 项通过**（拿到旧产物会显示 70/60/45/38）。
+发布后核对：运行 `./MiniLaunch.exe --selftest`，应显示 **127 项通过**（拿到旧产物会显示 70/60/45/38）。
 
 > 发布**不带** `PublishReadyToRun` —— SDK 的单文件打包器会重建宿主 exe 并丢弃图标资源（PE 里只剩 RCDATA/VERSION/MANIFEST）。
 > Do **not** enable `PublishReadyToRun` — the single-file bundler rebuilds the host executable and drops the embedded icon resource.
@@ -321,7 +321,7 @@ A：它常被中文输入法占用。注册失败时程序会弹气泡提示但*
 A：直接把 exe 或快捷方式**拖进窗口**，或者用托盘菜单「添加程序…」。自定义条目的优先级最高。
 
 **Q：常用网站怎么加？**
-A：托盘菜单「添加网站…」，填名称与网址（只填 `www.baidu.com` 也会自动补 `https://`），或点顶部的「百度 / 淘宝 / GitHub」快捷标签一键填好。保存后在搜索框输入 `baidu`、`bd` 或关键词都能搜到，回车用默认浏览器打开；右键条目可「编辑网站…」或「删除网站」。
+A：托盘菜单「添加网站…」，填名称与网址（只填 `www.baidu.com` 也会自动补 `https://`）即可。窗口底部的 tag 列表是**已经添加过的网站**：点标签=把它填进表单继续改，点标签上的 `×`=删掉它。保存后在搜索框输入名称、拼音（如 `bd`）或域名都能搜到，回车用默认浏览器打开；右键条目也可「编辑网站…」或「删除网站」。
 
 **Q：UWP 应用为什么有时候搜不到？**
 A：UWP 列表来自 `Get-StartApps`（powershell），有 7 天磁盘缓存。开机自启常驻时该扫描会推迟到窗口首次显示之后执行，属于正常行为。
@@ -408,7 +408,7 @@ Press `Ctrl+Space`, type a few characters, hit `Enter`. Everything else is delib
 | Icon cache | Icons are extracted on a **background thread**; the UI only reads the cache. LRU of 64 HICONs, destroyed on eviction |
 | Drag & drop | Drop an `.exe` or a shortcut onto the window to add a custom entry |
 | Folder shortcuts | Tray menu → *Add folder…* picks a directory and names it; Enter opens it directly, and pinned folders stay on top of an empty query |
-| Website shortcuts | Tray menu → *Add website…* stores your own shortcuts (Baidu / Taobao / GitHub…); Enter opens them in the default browser, and they are searchable by name, pinyin or keyword, with right-click edit/delete |
+| Website shortcuts | Tray menu → *Add website…* stores your own shortcuts (name + URL); Enter opens them in the default browser. The dialog lists your existing sites as tags at the bottom (click to edit, × to delete), and they are searchable by name, pinyin or domain |
 | Usage ranking | Apps used in the last 24 hours get an extra boost and float to the top |
 | Tray menu | Set hotkey / Add app / Rescan / Start with Windows / Quit |
 | Fully local | Config and usage stats live in `%APPDATA%\MiniLaunch\`; nothing ever leaves your machine |
@@ -433,7 +433,7 @@ Press `Ctrl+Space`, type a few characters, hit `Enter`. Everything else is delib
 # build (Debug / JIT is enough for day-to-day work)
 cd MiniLaunch && dotnet build
 
-# headless self-test — must be all green (baseline: 126 assertions), exit code 0
+# headless self-test — must be all green (baseline: 127 assertions), exit code 0
 ./artifacts/bin/MiniLaunch/debug/MiniLaunch.exe --selftest
 
 # publish a self-contained, trimmed single file (output: artifacts/publish/MiniLaunch/release_win-x64/)
