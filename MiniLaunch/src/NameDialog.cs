@@ -3,10 +3,12 @@ using System.Text;
 
 namespace MiniLaunch;
 
-// 名称输入小窗：给「文件夹快捷入口」起个显示名（Enter 确认 / Esc 取消，也可点按钮）
+// 名称输入小窗：给「文件夹快捷入口」起名 / 改名（Enter 确认 / Esc 取消，也可点按钮）
 // 自绘窗口 + 原生 EDIT 子控件（IME 友好），与 HotkeyDialog 同一套风格。
 // 底部两个按钮（取消 / 确定）是**自绘**的：原生 BUTTON 控件在暗色主题下是灰色的方块，
 // 与整体风格不搭；自绘还能自己控制圆角、悬停与按下反馈。
+// 调用方传入文件夹列表时，底部会多一行「已添加的文件夹」标签（与网站窗同一套 TagRow）：
+// 点标签=改这一条的显示名，点 ×=直接删掉它。
 public sealed class NameDialog
 {
     const string ClassName = "MiniLaunchNameDlg";
@@ -26,31 +28,50 @@ public sealed class NameDialog
     public IntPtr Hwnd;
     IntPtr _edit;
 
-    readonly string _title;
-    readonly string _hint;
-    readonly Func<string, bool> _onOk;   // 返回 true 表示接受并关闭
+    // 标题与路径都可变：点底部标签等于「改成那一条」，标题会切成「重命名文件夹」
+    string _title;
+    string _hint;
+    /// <summary>当前操作的目标路径：默认是刚选中的目录，点标签可换成已添加的其他文件夹。</summary>
+    string _targetPath;
+    /// <summary>确认回调：(名称, 目标路径) → true 表示接受并关闭。</summary>
+    readonly Func<string, string, bool> _onOk;
+    /// <summary>非空时底部显示「已添加的文件夹」标签行（取当前列表）。</summary>
+    readonly Func<List<CustomEntry>>? _folderProvider;
+    /// <summary>删除某个文件夹快捷入口（按路径）。</summary>
+    readonly Action<string>? _onDeleteFolder;
+    List<TagRow.Tag>? _tags;
+    /// <summary>放不下而没画的条目数（绘制时提示「另有 N 个未显示」）。</summary>
+    int _tagsHidden;
 
     float _scale = 1f;
-    int _w, _h, _pad, _editH;
-    IntPtr _fontTitle, _fontHint, _fontEdit, _fontSmall, _fontBtn, _brushEditBg, _brushBorder;
+    int _w, _h, _pad, _fieldH;
+    IntPtr _fontTitle, _fontHint, _fontEdit, _fontSmall, _fontBtn, _brushEditBg;
     string _error = "";
 
-    int _hover = -1;      // 鼠标悬停的按钮
-    int _pressed = -1;    // 按下未松开的按钮
+    int _hover = -1;      // 鼠标悬停的按钮/标签（TagRow 的命中编号）
+    int _pressed = -1;    // 按下未松开的按钮/标签
 
-    NameDialog(string title, string hint, Func<string, bool> onOk)
+    NameDialog(string title, string hint, Func<string, string, bool> onOk,
+        Func<List<CustomEntry>>? folderProvider, Action<string>? onDeleteFolder)
     {
         _title = title;
         _hint = hint;
+        _targetPath = hint ?? "";
         _onOk = onOk;
+        _folderProvider = folderProvider;
+        _onDeleteFolder = onDeleteFolder;
     }
 
-    /// <summary>弹出名称输入框。initial 为默认名称；onOk 返回 true 才关闭。</summary>
-    public static void Show(string title, string hint, string initial, Func<string, bool> onOk)
+    /// <summary>
+    /// 弹出名称输入框。initial 为默认名称；onOk(名称, 路径) 返回 true 才关闭。
+    /// folders / onDelete 非空时，底部额外显示「已添加的文件夹」标签行（点标签改名、点 × 删除）。
+    /// </summary>
+    public static void Show(string title, string hint, string initial, Func<string, string, bool> onOk,
+        Func<List<CustomEntry>>? folders = null, Action<string>? onDelete = null)
     {
         if (s_this != null) { Win32.SetForegroundWindow(s_this.Hwnd); return; }
 
-        var self = new NameDialog(title, hint, onOk);
+        var self = new NameDialog(title, hint, onOk, folders, onDelete);
         s_this = self;
         self.RecalcMetrics(1f);
 
@@ -92,57 +113,56 @@ public sealed class NameDialog
     {
         _scale = scale;
         _w = Scale(460);
-        _h = Scale(214);
+        _h = HeightFor(_folderProvider != null, scale);
         _pad = Scale(22);
-        _editH = Scale(30);
+        _fieldH = Scale(32);   // 输入框高度（含 1px 描边）
     }
 
     int Scale(int v) => (int)Math.Round(v * _scale);
 
+    /// <summary>窗口高度：带文件夹标签行时更高（允许 4 行标签；自检会用它算按钮/标签是否重叠）。</summary>
+    public static int HeightFor(bool withTags, float scale) => (int)Math.Round((withTags ? 352 : 214) * scale);
+
+    // 标签行的纵向布局（行高/间距与网站窗一致；名称窗允许 4 行，网站窗 2 行）
+    const int TagMaxRows = 4;
+    int TagLabelY => Scale(118);
+    int TagRow0Y => Scale(140);
+    int TagRowH => Scale(26);
+    int TagRowGap => Scale(6);
+    /// <summary>错误提示的 y：标签行在时得让开 TagMaxRows 行标签。</summary>
+    int ErrorY => _folderProvider != null
+        ? TagRow0Y + (TagRowH + TagRowGap) * TagMaxRows + Scale(4)
+        : _pad + Scale(54) + _fieldH + Scale(9);
+
+    /// <summary>
+    /// 输入框几何（外框 + 内部 EDIT）。两个窗共用 Theme.SingleLineField：
+    /// EDIT 必须比框小一圈，否则它的方角会把圆角描边切出四个「缺角」；
+    /// 控件高度取行高再居中，文字才不会贴在框顶。
+    /// </summary>
+    (Win32.RECT Box, Win32.RECT Edit) Field(int cx) =>
+        Theme.SingleLineField(_pad - 1, cx - _pad + 1, _pad + Scale(54), _fieldH, _scale);
+
     /// <summary>
     /// 底部按钮布局（客户端坐标）。返回 [x, y, w, h] × 2：第 0 个是「取消」，第 1 个是「确定」。
-    /// 抽成静态方法是为了让自检能在无头环境里验证命中区（点击确认全靠这套坐标）。
+    /// 抽成静态方法是为了让自检能在无头环境里验证命中区（点击确认全靠这套坐标）；
+    /// 具体尺寸已统一到 Theme.DialogButtonLayout（与网站窗共用一份）。
     /// </summary>
-    public static int[] ButtonLayout(int clientW, int clientH, float scale)
-    {
-        int pad = (int)Math.Round(22 * scale);
-        int btnH = (int)Math.Round(30 * scale);
-        int okW = (int)Math.Round(88 * scale);
-        int cancelW = (int)Math.Round(76 * scale);
-        int gap = (int)Math.Round(10 * scale);
-        int okX = clientW - pad - okW;
-        int cancelX = okX - gap - cancelW;
-        int y = clientH - pad - btnH;
-        return new[] { cancelX, y, cancelW, btnH, okX, y, okW, btnH };
-    }
+    public static int[] ButtonLayout(int clientW, int clientH, float scale) =>
+        Theme.DialogButtonLayout(clientW, clientH, scale);
 
     /// <summary>命中测试：点在「取消/确定」按钮上返回按钮索引，否则返回 -1。</summary>
-    public static int HitButton(int clientW, int clientH, float scale, int mx, int my)
-    {
-        var r = ButtonLayout(clientW, clientH, scale);
-        for (int i = 0; i < 2; i++)
-        {
-            int x = r[i * 4], y = r[i * 4 + 1], w = r[i * 4 + 2], h = r[i * 4 + 3];
-            if (mx >= x && mx < x + w && my >= y && my < y + h) return i;
-        }
-        return -1;
-    }
+    public static int HitButton(int clientW, int clientH, float scale, int mx, int my) =>
+        Theme.HitDialogButton(clientW, clientH, scale, mx, my);
 
     void CreateFonts()
     {
-        _fontTitle = MakeFont(16, Win32.FW_SEMIBOLD);
-        _fontHint = MakeFont(12, Win32.FW_NORMAL);
-        _fontEdit = MakeFont(15, Win32.FW_NORMAL);
-        _fontSmall = MakeFont(11, Win32.FW_NORMAL);
-        _fontBtn = MakeFont(13, Win32.FW_NORMAL);
+        _fontTitle = Theme.MakeFont(Theme.UiFont, 16, Win32.FW_SEMIBOLD, _scale);
+        _fontHint = Theme.MakeFont(Theme.UiFont, 12, Win32.FW_NORMAL, _scale);
+        _fontEdit = Theme.MakeFont(Theme.UiFont, 15, Win32.FW_NORMAL, _scale);
+        _fontSmall = Theme.MakeFont(Theme.UiFont, 11, Win32.FW_NORMAL, _scale);
+        _fontBtn = Theme.MakeFont(Theme.UiFont, 13, Win32.FW_NORMAL, _scale);
         _brushEditBg = Win32.CreateSolidBrush(Theme.Surface);
-        _brushBorder = Win32.CreateSolidBrush(Theme.SurfaceBorder);
     }
-
-    IntPtr MakeFont(int px, int weight) =>
-        Win32.CreateFontW(-Scale(px), 0, 0, 0, weight, 0, 0, 0,
-            Win32.DEFAULT_CHARSET, Win32.OUT_DEFAULT_PRECIS, Win32.CLIP_DEFAULT_PRECIS,
-            Win32.CLEARTYPE_QUALITY, Win32.DEFAULT_PITCH | Win32.FF_SWISS, "Microsoft YaHei UI");
 
     void DestroyRes()
     {
@@ -150,7 +170,6 @@ public sealed class NameDialog
             if (f != IntPtr.Zero) Win32.DeleteObject(f);
         _fontTitle = _fontHint = _fontEdit = _fontSmall = _fontBtn = IntPtr.Zero;
         if (_brushEditBg != IntPtr.Zero) { Win32.DeleteObject(_brushEditBg); _brushEditBg = IntPtr.Zero; }
-        if (_brushBorder != IntPtr.Zero) { Win32.DeleteObject(_brushBorder); _brushBorder = IntPtr.Zero; }
     }
 
     // ================= 窗口过程 =================
@@ -243,11 +262,11 @@ public sealed class NameDialog
                 }
                 return IntPtr.Zero;
 
-            // ===== 鼠标：悬停 / 按下 / 点击按钮 =====
+            // ===== 鼠标：悬停 / 按下 / 点击（按钮 + 底部标签）=====
             case Win32.WM_MOUSEMOVE:
             {
                 int x = Win32.LOWORD(l), y = Win32.HIWORD(l);
-                int hit = HitButton(_w, _h, _scale, x, y);
+                int hit = HitAt(x, y);
                 if (hit != _hover)
                 {
                     _hover = hit;
@@ -277,7 +296,7 @@ public sealed class NameDialog
             case Win32.WM_LBUTTONDOWN:
             {
                 int x = Win32.LOWORD(l), y = Win32.HIWORD(l);
-                int hit = HitButton(_w, _h, _scale, x, y);
+                int hit = HitAt(x, y);
                 if (hit >= 0)
                 {
                     _pressed = hit;
@@ -290,13 +309,16 @@ public sealed class NameDialog
             case Win32.WM_LBUTTONUP:
             {
                 int x = Win32.LOWORD(l), y = Win32.HIWORD(l);
-                int hit = HitButton(_w, _h, _scale, x, y);
+                int hit = HitAt(x, y);
                 int pressed = _pressed;
                 _pressed = -1;
                 Win32.InvalidateRect(h, IntPtr.Zero, false);
                 if (hit >= 0 && hit == pressed)
                 {
-                    if (hit == BtnOk) Commit(); else Close();
+                    if (hit == BtnOk) Commit();
+                    else if (hit == BtnCancel) Close();
+                    else if (hit >= TagRow.DelBase) DeleteTag(hit - TagRow.DelBase);
+                    else if (hit >= TagRow.HitBase) PickTag(hit - TagRow.HitBase);
                 }
                 return IntPtr.Zero;
             }
@@ -320,11 +342,103 @@ public sealed class NameDialog
 
     void Close() => Win32.DestroyWindow(Hwnd);
 
+    /// <summary>统一命中测试：按钮优先，其次底部标签；都没有则 -1。</summary>
+    int HitAt(int mx, int my)
+    {
+        int hit = HitButton(_w, _h, _scale, mx, my);
+        if (hit >= 0) return hit;
+        if (_folderProvider == null) return -1;
+        return TagRow.Hit(Tags(), TagRow0Y, TagRowH, TagRowGap, mx, my);
+    }
+
+    // ================= 底部「已添加的文件夹」标签 =================
+
+    /// <summary>当前标签布局（缓存：鼠标移动/重绘频率很高，不必每次重建）。</summary>
+    List<TagRow.Tag> Tags()
+    {
+        if (_tags != null) return _tags;
+        var items = new List<(string Name, string Key)>();
+        try
+        {
+            var folders = _folderProvider?.Invoke();
+            if (folders != null)
+                foreach (var c in folders)
+                {
+                    string nm = string.IsNullOrWhiteSpace(c.Name) ? FolderNameOf(c.Path) : c.Name.Trim();
+                    items.Add((nm, c.Path));
+                }
+        }
+        catch { }
+        _tags = TagRow.Build(items, _targetPath, _w, _scale, TagMaxRows, 22f, out _tagsHidden);
+        return _tags;
+    }
+
+    /// <summary>目录默认显示名（取目录名；根目录/非法路径回退为原路径）。</summary>
+    static string FolderNameOf(string path)
+    {
+        try
+        {
+            string n = new DirectoryInfo((path ?? "").TrimEnd('\\')).Name;
+            return n.Length > 0 ? n : path ?? "";
+        }
+        catch { return path ?? ""; }
+    }
+
+    /// <summary>列表/当前目标/DPI 变化后失效（否则会点到旧位置）。</summary>
+    void InvalidateTags() => _tags = null;
+
+    /// <summary>点标签：把该文件夹填进表单（改成它的显示名）。</summary>
+    void PickTag(int index)
+    {
+        var tags = Tags();
+        if (index < 0 || index >= tags.Count) return;
+        var t = tags[index];
+        string name = t.Name;
+        try
+        {
+            var folders = _folderProvider?.Invoke();
+            if (folders != null)
+                foreach (var c in folders)
+                {
+                    if (!c.Path.Equals(t.Key, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!string.IsNullOrWhiteSpace(c.Name)) name = c.Name.Trim();
+                    break;
+                }
+        }
+        catch { }
+        _targetPath = t.Key;
+        _title = "重命名文件夹";
+        _hint = t.Key;
+        Win32.SetWindowTextW(Hwnd, _title);
+        Win32.SetWindowTextW(_edit, name);
+        Win32.SetFocus(_edit);
+        Win32.SendMessageW(_edit, Win32.EM_SETSEL, IntPtr.Zero, (IntPtr)(-1));
+        InvalidateTags();   // 高亮项变了
+        Win32.InvalidateRect(Hwnd, IntPtr.Zero, true);
+    }
+
+    /// <summary>点标签上的「×」：删掉该文件夹快捷入口。</summary>
+    void DeleteTag(int index)
+    {
+        var tags = Tags();
+        if (index < 0 || index >= tags.Count) return;
+        string path = tags[index].Key;
+        try { _onDeleteFolder?.Invoke(path); } catch { }
+        if (string.Equals(path, _targetPath, StringComparison.OrdinalIgnoreCase))
+        {
+            // 删掉的正是当前目标：标题回到「添加」（路径留着，确认即重新添加）
+            _title = "添加文件夹";
+            Win32.SetWindowTextW(Hwnd, _title);
+        }
+        InvalidateTags();   // 列表变了
+        Win32.InvalidateRect(Hwnd, IntPtr.Zero, true);
+    }
+
     void LayoutEdit()
     {
         if (_edit == IntPtr.Zero) return;
-        int t = _pad + Scale(56);
-        Win32.MoveWindow(_edit, _pad, t, _w - _pad * 2, _editH, true);
+        var (_, edit) = Field(_w);
+        Win32.MoveWindow(_edit, edit.L, edit.T, edit.Width, edit.Height, true);
         if (_fontEdit != IntPtr.Zero)
             Win32.SendMessageW(_edit, Win32.WM_SETFONT, _fontEdit, (IntPtr)1);
         int mg = Scale(10);
@@ -350,119 +464,74 @@ public sealed class NameDialog
             return;
         }
         bool ok;
-        try { ok = _onOk(text); }
+        try { ok = _onOk(text, _targetPath); }
         catch { ok = false; }
         if (ok) { Close(); return; }
         Win32.InvalidateRect(Hwnd, IntPtr.Zero, false);
     }
 
     // ================= 绘制 =================
-    void OnPaint()
+    void OnPaint() => Theme.BufferedPaint(Hwnd, DrawContent);
+
+    void DrawContent(IntPtr mem, int cx, int cy)
     {
-        IntPtr hdc = Win32.BeginPaint(Hwnd, out var ps);
-        try
+        var all = new Win32.RECT { L = 0, T = 0, R = cx, B = cy };
+        Theme.GradientV(mem, all, Theme.BgTop, Theme.BgBottom);
+        Win32.SetBkMode(mem, Win32.TRANSPARENT);
+
+        // 标题
+        Win32.SelectObject(mem, _fontTitle);
+        Win32.SetTextColor(mem, (int)Theme.TextMain);
+        var rTitle = new Win32.RECT { L = _pad, T = _pad, R = cx - _pad, B = _pad + Scale(24) };
+        Win32.DrawTextW(mem, _title, -1, ref rTitle, Theme.AlignLeft);
+
+        // 说明（路径等）
+        Win32.SelectObject(mem, _fontHint);
+        Win32.SetTextColor(mem, (int)Theme.TextSub);
+        int hy = _pad + Scale(28);
+        var rHint = new Win32.RECT { L = _pad, T = hy, R = cx - _pad, B = hy + Scale(18) };
+        Win32.DrawTextW(mem, _hint, -1, ref rHint, Theme.AlignLeft);
+
+        // 输入框：1px 圆角描边 + 内圈底色（都由父窗口画），EDIT 内缩坐在里面（否则方角会切掉圆角）
+        var (box, _) = Field(cx);
+        Theme.RoundBorderBox(mem, box, Scale(9), Theme.Surface);
+
+        // 底部：已添加的文件夹标签（与网站窗同一套 TagRow：点标签改名、点 × 删除）
+        if (_folderProvider != null)
         {
-            Win32.GetClientRect(Hwnd, out var rc);
-            int cx = rc.Width, cy = rc.Height;
-            if (cx <= 0 || cy <= 0) return;
+            var tags = Tags();
+            TagRow.Draw(mem, tags, TagLabelY, TagRow0Y, TagRowH, TagRowGap, _hover, _pressed,
+                _fontSmall, _fontHint, cx, _scale,
+                "已添加的文件夹（点标签改名，点 × 删除）", "（还没有添加文件夹）",
+                hidden: _tagsHidden);
+        }
 
-            IntPtr mem = Win32.CreateCompatibleDC(hdc);
-            IntPtr bmp = Win32.CreateCompatibleBitmap(hdc, cx, cy);
-            IntPtr oldBmp = Win32.SelectObject(mem, bmp);
-
-            var all = new Win32.RECT { L = 0, T = 0, R = cx, B = cy };
-            Theme.GradientV(mem, all, Theme.BgTop, Theme.BgBottom);
-            Win32.SetBkMode(mem, Win32.TRANSPARENT);
-
-            // 标题
-            Win32.SelectObject(mem, _fontTitle);
-            Win32.SetTextColor(mem, (int)Theme.TextMain);
-            var rTitle = new Win32.RECT { L = _pad, T = _pad, R = cx - _pad, B = _pad + Scale(24) };
-            Win32.DrawTextW(mem, _title, -1, ref rTitle, Theme.AlignLeft);
-
-            // 说明（路径等）
-            Win32.SelectObject(mem, _fontHint);
-            Win32.SetTextColor(mem, (int)Theme.TextSub);
-            int hy = _pad + Scale(28);
-            var rHint = new Win32.RECT { L = _pad, T = hy, R = cx - _pad, B = hy + Scale(18) };
-            Win32.DrawTextW(mem, _hint, -1, ref rHint, Theme.AlignLeft);
-
-            // 输入框外框（EDIT 自己填底色，这里只画 1px 描边圆角）
-            var box = new Win32.RECT
-            {
-                L = _pad - 1,
-                T = _pad + Scale(55),
-                R = cx - _pad + 1,
-                B = _pad + Scale(56) + _editH + 1,
-            };
-            Theme.FillRoundSolid(mem, box, Scale(8), _brushBorder);
-
-            // 错误提示
-            if (_error.Length > 0)
-            {
-                Win32.SelectObject(mem, _fontSmall);
-                Win32.SetTextColor(mem, (int)Theme.Warn);
-                int ey = _pad + Scale(56) + _editH + Scale(10);
-                var rErr = new Win32.RECT { L = _pad, T = ey, R = cx - _pad, B = ey + Scale(16) };
-                Win32.DrawTextW(mem, _error, -1, ref rErr, Theme.AlignLeft);
-            }
-
-            // 按钮
-            var lay = ButtonLayout(cx, cy, _scale);
-            DrawButton(mem, lay, BtnCancel, "取消", false);
-            DrawButton(mem, lay, BtnOk, "确定", true);
-
-            // 底部提示（左侧）
+        // 错误提示（有标签行时让开两行标签）
+        if (_error.Length > 0)
+        {
             Win32.SelectObject(mem, _fontSmall);
-            Win32.SetTextColor(mem, (int)Theme.TextDim);
-            int by = lay[1];
-            var rBot = new Win32.RECT { L = _pad, T = by, R = lay[0] - Scale(10), B = by + lay[3] };
-            Win32.DrawTextW(mem, "Enter 确认  ·  Esc 取消", -1, ref rBot, Theme.AlignLeft);
+            Win32.SetTextColor(mem, (int)Theme.Warn);
+            int ey = ErrorY;
+            var rErr = new Win32.RECT { L = _pad, T = ey, R = cx - _pad, B = ey + Scale(16) };
+            Win32.DrawTextW(mem, _error, -1, ref rErr, Theme.AlignLeft);
+        }
 
-            Win32.BitBlt(hdc, 0, 0, cx, cy, mem, 0, 0, Win32.SRCCOPY);
-            Win32.SelectObject(mem, oldBmp);
-            Win32.DeleteObject(bmp);
-            Win32.DeleteDC(mem);
-        }
-        finally
-        {
-            Win32.EndPaint(Hwnd, ref ps);
-        }
+        // 按钮
+        var lay = ButtonLayout(cx, cy, _scale);
+        DrawButton(mem, lay, BtnCancel, "取消", false);
+        DrawButton(mem, lay, BtnOk, "确定", true);
+
+        // 底部提示（左侧）
+        Win32.SelectObject(mem, _fontSmall);
+        Win32.SetTextColor(mem, (int)Theme.TextDim);
+        int by = lay[1];
+        var rBot = new Win32.RECT { L = _pad, T = by, R = lay[0] - Scale(10), B = by + lay[3] };
+        Win32.DrawTextW(mem, "Enter 确认  ·  Esc 取消", -1, ref rBot, Theme.AlignLeft);
     }
 
-    /// <summary>画一个自绘按钮（主按钮用渐变，次按钮用描边）。</summary>
-    void DrawButton(IntPtr hdc, int[] lay, int index, string text, bool primary)
-    {
-        int x = lay[index * 4], y = lay[index * 4 + 1], w = lay[index * 4 + 2], h = lay[index * 4 + 3];
-        bool hover = _hover == index;
-        bool pressed = _pressed == index;
-        int dy = pressed ? 1 : 0;
-
-        var rc = new Win32.RECT { L = x, T = y + dy, R = x + w, B = y + h + dy };
-        if (primary)
-        {
-            uint top = pressed ? Theme.SelBottom : (hover ? Win32.Rgb(0x6E, 0x8C, 0xFF) : Theme.SelTop);
-            uint bot = pressed ? Win32.Rgb(0x2F, 0x4A, 0xB8) : (hover ? Win32.Rgb(0x4E, 0x6B, 0xE8) : Theme.SelBottom);
-            Theme.FillRoundGradient(hdc, rc, Scale(8), top, bot);
-        }
-        else
-        {
-            uint bg = pressed ? Win32.Rgb(0x22, 0x24, 0x2C) : (hover ? Theme.Hover : Theme.Surface);
-            // 圆角描边：先画外扩一圈的边框色，再画内圈底色 → 得到 1px 圆角边框
-            IntPtr brBorder = Win32.CreateSolidBrush(Theme.SurfaceBorder);
-            var outer = new Win32.RECT { L = rc.L - 1, T = rc.T - 1, R = rc.R + 1, B = rc.B + 1 };
-            Theme.FillRoundSolid(hdc, outer, Scale(8) + 1, brBorder);
-            Win32.DeleteObject(brBorder);
-            IntPtr brBg = Win32.CreateSolidBrush(bg);
-            Theme.FillRoundSolid(hdc, rc, Scale(8), brBg);
-            Win32.DeleteObject(brBg);
-        }
-
-        Win32.SelectObject(hdc, _fontBtn);
-        Win32.SetTextColor(hdc, (int)(primary ? Theme.TextOnSel : Theme.TextMain));
-        var tr = new Win32.RECT { L = rc.L, T = rc.T, R = rc.R, B = rc.B };
-        Win32.DrawTextW(hdc, text, -1, ref tr, Theme.AlignCenter);
-    }
+    /// <summary>画一个自绘按钮（实现已统一到 Theme.DrawButton，与网站窗共用）。</summary>
+    void DrawButton(IntPtr hdc, int[] lay, int index, string text, bool primary) =>
+        Theme.DrawButton(hdc, lay, index, text, primary, _hover == index, _pressed == index, _fontBtn, _scale);
 
     // ================= EDIT 子类化 =================
     static IntPtr EditProcStatic(IntPtr h, uint msg, IntPtr w, IntPtr l, IntPtr id, IntPtr data)

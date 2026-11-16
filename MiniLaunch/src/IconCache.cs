@@ -13,7 +13,10 @@ public sealed class IconCache : IDisposable
     readonly LinkedList<string> _lru = new();
     readonly Dictionary<string, IntPtr> _map = new();
     readonly HashSet<string> _pending = new();      // 已排队/已提取，等待并入 LRU
-    readonly HashSet<string> _failed = new();       // 提取彻底失败（连兑底图标都拿不到）→ 不再重复试
+    /// <summary>提取失败的 key → 失败时刻（Ticks）。不永久拉黑：程序稍后装好、网络盘恢复后应该还能拿到图标。</summary>
+    readonly Dictionary<string, long> _failed = new();
+    /// <summary>失败后的冷却期（期内不重试，避免每次重绘都拉一次 shell）。</summary>
+    static readonly long FailCooldownTicks = TimeSpan.FromMinutes(10).Ticks;
     readonly Queue<Entry> _queue = new();           // 待提取队列
     readonly Queue<(string Key, IntPtr Icon)> _ready = new(); // 后台已提取，待并入 LRU
     readonly AutoResetEvent _signal = new(false);
@@ -54,12 +57,49 @@ public sealed class IconCache : IDisposable
         string key = KeyOf(e);
         lock (_lock)
         {
-            if (_map.ContainsKey(key) || _pending.Contains(key) || _failed.Contains(key)) return;
+            if (_map.ContainsKey(key) || _pending.Contains(key)) return;
+            if (_failed.TryGetValue(key, out long at))
+            {
+                if (DateTime.UtcNow.Ticks - at < FailCooldownTicks) return;   // 冷却期内不重试
+                _failed.Remove(key);                                          // 冷却结束：允许再试
+            }
             _pending.Add(key);
             _queue.Enqueue(e);
         }
         EnsureWorker();
         _signal.Set();
+    }
+
+    /// <summary>
+    /// 把一张图标并入 LRU（调用方必须持有 _lock）。
+    /// Get() 与 Pump() 原来各写了一遍「已有则销毁新的 / 满载则驱逐最旧」，合并到这里。
+    /// </summary>
+    void InsertLocked(string key, IntPtr icon)
+    {
+        if (_map.TryGetValue(key, out var exist))
+        {
+            // 已有同 key：沿用旧的，销毁多余的那个
+            if (icon != exist && icon != IntPtr.Zero) Win32.DestroyIcon(icon);
+            return;
+        }
+        if (icon == IntPtr.Zero)
+        {
+            // 彻底失败：记下来（带冷却），避免每次重绘都重新排队拉 shell
+            if (_failed.Count > 256) _failed.Clear();
+            _failed[key] = DateTime.UtcNow.Ticks;
+            return;
+        }
+        if (_map.Count >= Cap)
+        {
+            var last = _lru.Last?.Value;
+            if (last != null)
+            {
+                _lru.RemoveLast();
+                if (_map.Remove(last, out var old) && old != IntPtr.Zero) Win32.DestroyIcon(old);
+            }
+        }
+        _map[key] = icon;
+        _lru.AddFirst(key);
     }
 
     /// <summary>把后台已提取的图标并入 LRU（必须在 UI 线程调用：销毁 HICON 不能与绘制并发）。</summary>
@@ -73,31 +113,7 @@ public sealed class IconCache : IDisposable
             {
                 if (_ready.Count == 0) break;
                 item = _ready.Dequeue();
-            }
-            lock (_lock)
-            {
-                if (_map.TryGetValue(item.Key, out var exist))
-                {
-                    // 已有同 key：沿用旧的，销毁多余的那个
-                    if (item.Icon != exist && item.Icon != IntPtr.Zero) Win32.DestroyIcon(item.Icon);
-                }
-                else if (item.Icon == IntPtr.Zero)
-                {
-                    // 彻底失败：记下来，避免每次重绘都重新排队（死循环拉 shell）
-                    if (_failed.Count > 256) _failed.Clear();
-                    _failed.Add(item.Key);
-                }
-                else
-                {
-                    if (_map.Count >= Cap)
-                    {
-                        var last = _lru.Last!.Value;
-                        _lru.RemoveLast();
-                        if (_map.Remove(last, out var old) && old != IntPtr.Zero) Win32.DestroyIcon(old);
-                    }
-                    _map[item.Key] = item.Icon;
-                    _lru.AddFirst(item.Key);
-                }
+                InsertLocked(item.Key, item.Icon);
                 _pending.Remove(item.Key);
             }
             any = true;
@@ -117,23 +133,8 @@ public sealed class IconCache : IDisposable
         string key = KeyOf(e);
         lock (_lock)
         {
-            if (_map.TryGetValue(key, out var exist))
-            {
-                if (icon != exist && icon != IntPtr.Zero) Win32.DestroyIcon(icon);
-                return exist;
-            }
-            if (_map.Count >= Cap)
-            {
-                var last = _lru.Last!.Value;
-                _lru.RemoveLast();
-                if (_map.Remove(last, out var old) && old != IntPtr.Zero) Win32.DestroyIcon(old);
-            }
-            if (icon != IntPtr.Zero)
-            {
-                _map[key] = icon;
-                _lru.AddFirst(key);
-            }
-            return icon;
+            InsertLocked(key, icon);
+            return _map.TryGetValue(key, out var got) ? got : IntPtr.Zero;
         }
     }
 
@@ -152,6 +153,22 @@ public sealed class IconCache : IDisposable
     }
 
     void Worker()
+    {
+        // 工作线程要拉 shell 的 API（SHGetFileInfo → 可能加载 shell 扩展）：
+        // 先把本线程初始化成 STA，否则部分扩展会静默失败（图标退化成默认图标）。
+        bool comInit = false;
+        try { comInit = Win32.CoInitializeEx(IntPtr.Zero, Win32.COINIT_APARTMENTTHREADED) >= 0; } catch { }
+        try
+        {
+            WorkerLoop();
+        }
+        finally
+        {
+            if (comInit) { try { Win32.CoUninitialize(); } catch { } }
+        }
+    }
+
+    void WorkerLoop()
     {
         while (!_stop)
         {

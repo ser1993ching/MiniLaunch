@@ -11,6 +11,10 @@ public sealed class SearchEngine
 
     public int Count => _all.Length;
 
+    /// <summary>分词分隔符：半角空格 / Tab / 全角空格。中文输入法下很容易打出全角空格，
+    /// 只认半角的话「微信　会议」这种输入永远搜不到。</summary>
+    static readonly char[] TokenSeparators = { ' ', '\t', '\u3000' };
+
     /// <summary>查询：多词 AND；空查询返回常用项。</summary>
     public List<Entry> Query(string q, int max)
     {
@@ -25,7 +29,7 @@ public sealed class SearchEngine
             return r;
         }
 
-        var tokens = q.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var tokens = q.ToLowerInvariant().Split(TokenSeparators, StringSplitOptions.RemoveEmptyEntries);
         var scored = new List<(Entry E, int S)>();
         foreach (var e in all)
         {
@@ -58,15 +62,12 @@ public sealed class SearchEngine
 
     int UsageBoost(Entry e)
     {
-        if (_usage.Recs.TryGetValue(e.UniqueKey, out var r) && r.Count > 0)
-        {
-            int boost = (int)Math.Min(30, Math.Log2(1 + r.Count) * 12);
-            long age = DateTime.UtcNow.Ticks - r.LastTicks;
-            if (age < TimeSpan.FromHours(24).Ticks) boost += 15;
-            else if (age < TimeSpan.FromDays(7).Ticks) boost += 8;
-            return boost;
-        }
-        return 0;
+        if (!_usage.TryGet(e.UniqueKey, out var r) || r == null || r.Count <= 0) return 0;
+        int boost = (int)Math.Min(30, Math.Log2(1 + r.Count) * 12);
+        long age = DateTime.UtcNow.Ticks - r.LastTicks;
+        if (age < TimeSpan.FromHours(24).Ticks) boost += 15;
+        else if (age < TimeSpan.FromDays(7).Ticks) boost += 8;
+        return boost;
     }
 
     int IdleCompare(Entry a, Entry b)
@@ -80,8 +81,8 @@ public sealed class SearchEngine
         // 首屏 8 行全被文件夹占满、常用程序（如 vdi/docker）被挤到看不见，故降为次级键。
         // 注意：Count 不能加权拼进 Ticks——Ticks≈6.4e17，次数权重会被完全淹没
         //（历史 bug，自检有空查询回归断言）。
-        _usage.Recs.TryGetValue(a.UniqueKey, out var ra);
-        _usage.Recs.TryGetValue(b.UniqueKey, out var rb);
+        _usage.TryGet(a.UniqueKey, out var ra);
+        _usage.TryGet(b.UniqueKey, out var rb);
         int ca = ra?.Count ?? 0, cb = rb?.Count ?? 0;
         if (ca != cb) return cb.CompareTo(ca);
         int fa = (a.Source == EntrySource.Custom && a.IsFolder) ? 0 : 1;

@@ -48,6 +48,68 @@ public class UsageRec
 public class UsageDb
 {
     public Dictionary<string, UsageRec> Recs { get; set; } = new();
+
+    /// <summary>
+    /// 并发保护。Recs 会被两条线程碰：UI 线程（启动条目时记用量）与扫描线程（扫描结束后
+    /// 裁剪失效记录）。Dictionary 并发读写会破坏内部结构（抛异常或死循环），所以统一走
+    /// 下面几个方法。注意 public field 不参与 System.Text.Json 序列化（IncludeFields 默认 false），
+    /// 所以不会改变 usage.json 的格式。
+    /// </summary>
+    public readonly object Lock = new();
+
+    /// <summary>记一次使用。</summary>
+    public void Bump(string key)
+    {
+        lock (Lock)
+        {
+            if (!Recs.TryGetValue(key, out var r)) Recs[key] = r = new UsageRec();
+            r.Count++;
+            r.LastTicks = DateTime.UtcNow.Ticks;
+        }
+    }
+
+    /// <summary>查用量（搜索排序用）。</summary>
+    public bool TryGet(string key, out UsageRec? rec)
+    {
+        lock (Lock) return Recs.TryGetValue(key, out rec);
+    }
+
+    /// <summary>把一条记录从 oldKey 搬到 newKey（重命名条目后保持用量不丢），返回是否发生搬迁。</summary>
+    public bool Move(string oldKey, string newKey)
+    {
+        lock (Lock)
+        {
+            if (oldKey == newKey) return false;
+            if (!Recs.TryGetValue(oldKey, out var rec)) return false;
+            Recs.Remove(oldKey);
+            Recs[newKey] = rec;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// 剔除「不在 keep 里」且「早于 beforeTicks 未使用」的记录，返回删除条数。
+    /// 为什么要加时间滞回：某次扫描如果因权限/临时错误少扫了一大批（比如开始菜单读失败），
+    /// 无条件按 keep 裁剪会把用户多年的使用历史一次抹干。30 天内用过的记录一律留着。
+    /// </summary>
+    public int PruneTo(HashSet<string> keep, long beforeTicks)
+    {
+        lock (Lock)
+        {
+            List<string>? dead = null;
+            foreach (var (k, v) in Recs)
+                if (!keep.Contains(k) && v.LastTicks < beforeTicks) (dead ??= new List<string>()).Add(k);
+            if (dead == null) return 0;
+            foreach (var k in dead) Recs.Remove(k);
+            return dead.Count;
+        }
+    }
+
+    /// <summary>快照（序列化落盘用，避免写盘期间被另一条线程改）。</summary>
+    public UsageDb Clone()
+    {
+        lock (Lock) return new UsageDb { Recs = new Dictionary<string, UsageRec>(Recs) };
+    }
 }
 
 public class UwpCacheItem
@@ -102,6 +164,22 @@ public static class ConfigStore
                     c.Custom ??= new List<CustomEntry>();
                     // 同理：用户手改 config.json 写成 "Websites": null 也要补空列表
                     c.Websites ??= new List<WebSiteEntry>();
+                    c.Hotkey ??= HotkeyParser.DefaultHotkey;
+                    // 条目字段也要洗净：写成 "Path": null 时，所有 c.Path.Equals(...) 都会 NRE，
+                    // 而这些调用点全在 UI 线程（拖放 / 添加文件夹 / 重命名 / 删除），
+                    // 未处理异常 = 进程直接退出。集中在这里兜一次，比到处写 ?? "" 可靠。
+                    foreach (var e in c.Custom)
+                    {
+                        e.Name ??= "";
+                        e.Path ??= "";
+                        e.Args ??= "";
+                        e.WorkDir ??= "";
+                    }
+                    foreach (var w in c.Websites)
+                    {
+                        w.Name ??= "";
+                        w.Url ??= "";
+                    }
                     return c;
                 }
             }
@@ -134,7 +212,7 @@ public static class ConfigStore
 
     public static void SaveUsage(UsageDb u)
     {
-        try { SaveAtomic(Paths.UsagePath, JsonSerializer.Serialize(u, JsonCtx.Default.UsageDb)); } catch { }
+        try { SaveAtomic(Paths.UsagePath, JsonSerializer.Serialize(u.Clone(), JsonCtx.Default.UsageDb)); } catch { }
     }
 
     public static void SaveAtomic(string path, string content)

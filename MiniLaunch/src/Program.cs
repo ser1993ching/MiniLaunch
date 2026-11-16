@@ -15,7 +15,8 @@ public static class Program
     static SearchEngine _search = null!;
     static IconCache _icons = null!;
     static MainWindow? _win;
-    static int _scanning;
+    /// <summary>扫描进行中标志；扫描期间又来的请求记在 _scanPending 里，扫完立刻再扫一轮。</summary>
+    static int _scanning, _scanPending;
 
     /// <summary>热键是否注册成功（诊断用）。</summary>
     public static bool HotkeyOk { get; private set; }
@@ -71,7 +72,11 @@ public static class Program
 
         StartScan(false);
 
-        var signalThread = new Thread(WaitShowSignal) { IsBackground = true };
+        // 命名事件必须在**主线程**先建好再交给后台线程：
+        // 第二个实例 Set() 时若本进程还没 Create，信号会直接丢掉
+        // （表现为「双击 exe 没反应」一次，只能再双击一次）。
+        var showEvent = CreateShowEvent();
+        var signalThread = new Thread(() => WaitShowSignal(showEvent)) { IsBackground = true };
         signalThread.Start();
 
         _win = MainWindow.Create(_cfg, _search, _icons, OnLaunch, () => StartScan(true), AddFiles);
@@ -90,6 +95,10 @@ public static class Program
         HotkeyOk = hkOk;
         if (!hkOk)
             Tray.Notify("热键注册失败", $"“{_cfg.Hotkey}”可能被其他程序占用，右键托盘图标可重新设置。");
+
+        // 自启诊断报告必须晚于热键注册（也晚于 Tray.Init）：报告里含「热键是否注册成功」，
+        // 早写的话这两个字段永远是 false，报告会一直误报「★ 热键注册失败」。
+        WriteAutoStartReport();
 
         if (firstRun)
         {
@@ -113,11 +122,49 @@ public static class Program
             HotkeyDialog.PreviewMode = true;
             ShowHotkeySettings();
         }
-        // 名称输入窗预览（调试/截图用）
+        // 名称输入窗预览（调试/截图用）：带「已添加的文件夹」标签行，与真实入口一致
         if (args.Contains("--name-dialog"))
         {
             _win.PreviewMode = true;
-            NameDialog.Show("添加文件夹", @"D:\项目\MiniLaunch", "MiniLaunch", _ => true);
+            NameDialog.Show("添加文件夹", @"E:\code\启动器", "启动器", (n, p) => true,
+                () => new List<CustomEntry>
+                {
+                    new() { Name = "启动器", Path = @"E:\code\启动器", IsFolder = true },
+                    new() { Name = "电磁计算", Path = @"D:\Desktop\电磁计算", IsFolder = true },
+                    new() { Name = "Moonglade-blog", Path = @"E:\code\Moonglade-blog", IsFolder = true },
+                    new() { Name = "工作日报", Path = @"D:\工作日报", IsFolder = true },
+                    new() { Name = "设计稿", Path = @"D:\设计稿", IsFolder = true },
+                    new() { Name = "Downloads", Path = @"C:\Users\x\Downloads", IsFolder = true },
+                    new() { Name = "源码归档", Path = @"E:\src", IsFolder = true },
+                    new() { Name = "截图", Path = @"D:\截图", IsFolder = true },
+                    new() { Name = "会议记录", Path = @"D:\会议记录", IsFolder = true },
+                    new() { Name = "合同模版", Path = @"D:\合同模版", IsFolder = true },
+                    new() { Name = "固件包", Path = @"E:\firmware", IsFolder = true },
+                    new() { Name = "虚拟机镜像", Path = @"E:\vm", IsFolder = true },
+                    new() { Name = "财务 2026", Path = @"D:\财务 2026", IsFolder = true },
+                    new() { Name = "临时文件", Path = @"D:\tmp", IsFolder = true },
+                },
+                _ => { });
+        }
+        // 重命名窗预览（不带标签行的紧凑版）
+        if (args.Contains("--name-dialog-plain"))
+        {
+            _win.PreviewMode = true;
+            NameDialog.Show("重命名", @"D:\Desktop\电磁计算", "电磁计算", (n, p) => true);
+        }
+        // 标签行溢出预览：文件夹多到 4 行放不下，验证「另有 N 个未显示」（调试/截图用）
+        if (args.Contains("--name-dialog-many"))
+        {
+            _win.PreviewMode = true;
+            NameDialog.Show("添加文件夹", @"E:\code\启动器", "启动器", (n, p) => true,
+                () =>
+                {
+                    var list = new List<CustomEntry>();
+                    for (int i = 1; i <= 30; i++)
+                        list.Add(new CustomEntry { Name = "文件夹 " + i.ToString("00"), Path = @"D:\demo\folder" + i, IsFolder = true });
+                    return list;
+                },
+                _ => { });
         }
         // 网站编辑窗预览（调试/截图用）
         if (args.Contains("--web-dialog"))
@@ -161,12 +208,18 @@ public static class Program
         return 0;
     }
 
-    static void WaitShowSignal()
+    static EventWaitHandle? CreateShowEvent()
     {
+        try { return new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName); }
+        catch { return null; }
+    }
+
+    /// <summary>后台等「第二个实例让我显示」的信号（句柄由主线程创建后传入，只建一次）。</summary>
+    static void WaitShowSignal(EventWaitHandle? ev)
+    {
+        if (ev == null) return;
         try
         {
-            // 句柄只建一次：每轮循环重建会在 dispose/重建的间隙丢掉第二实例的信号
-            using var ev = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
             while (true)
             {
                 if (ev.WaitOne() && _win != null)
@@ -184,13 +237,18 @@ public static class Program
 
     public static void OnLaunch(Entry e, bool runAs)
     {
-        bool ok = Launcher.Run(e, runAs);
-        if (ok)
+        // 提权（UAC）时 ShellExecuteEx 会阻塞调用线程直到用户确认：放到线程池，
+        // 否则 UI 线程（消息循环）被卡住——热键、托盘、重绘全部无响应。
+        // 用量先乐观记一次，避免后台线程去碰 _usage（UI 线程也在写）。
+        if (runAs || e.RunAs)
         {
-            if (!_usage.Recs.TryGetValue(e.UniqueKey, out var r))
-                _usage.Recs[e.UniqueKey] = r = new UsageRec();
-            r.Count++;
-            r.LastTicks = DateTime.UtcNow.Ticks;
+            _usage.Bump(e.UniqueKey);
+            ConfigStore.SaveUsage(_usage);
+            ThreadPool.QueueUserWorkItem(_ => Launcher.Run(e, runAs));
+        }
+        else if (Launcher.Run(e, false))
+        {
+            _usage.Bump(e.UniqueKey);
             ConfigStore.SaveUsage(_usage);
         }
         _win?.HideWin();
@@ -198,12 +256,30 @@ public static class Program
 
     public static void StartScan(bool foreground)
     {
-        if (Interlocked.CompareExchange(ref _scanning, 1, 0) != 0) return;
+        // 扫描进行中又来一次请求（新增 / 删除 / 改名 / 拖放都会走这里）：**不能直接丢弃**。
+        // 正在跑的扫描用的是它开始时的配置快照，丢弃请求的后果是：
+        //   · 刚加的条目不会出现在列表里（要重启才看得到）；
+        //   · 刚删的条目被旧快照 publish 回去（删了还在、还能回车启动）。
+        // 改成记账，扫完立刻再扫一轮。
+        if (Interlocked.CompareExchange(ref _scanning, 1, 0) != 0)
+        {
+            Interlocked.Exchange(ref _scanPending, 1);
+            return;
+        }
+
         var t = new Thread(() =>
         {
-            try { DoScan(); }
-            // 兑底：扫描线程的任何异常都不能带崩进程（列出错误便于诊断）
-            catch (Exception ex) { NativeOut.WriteLine("扫描线程异常: " + ex.GetType().Name + ": " + ex.Message); }
+            try
+            {
+                do
+                {
+                    Interlocked.Exchange(ref _scanPending, 0);
+                    try { DoScan(); }
+                    // 兑底：扫描线程的任何异常都不能带崩进程（列出错误便于诊断）
+                    catch (Exception ex) { NativeOut.WriteLine("扫描线程异常: " + ex.GetType().Name + ": " + ex.Message); }
+                }
+                while (Volatile.Read(ref _scanPending) != 0);
+            }
             finally { Interlocked.Exchange(ref _scanning, 0); }
         })
         {
@@ -227,17 +303,32 @@ public static class Program
         // 结果是 UWP 应用永远扫不到、永远搜不出来。现在最多等 3 秒就照常扫。
         try { FirstShown.Wait(TimeSpan.FromSeconds(3)); } catch { }
         var uwp = Scanners.ScanUwp(false);
-        PublishEntries(custom, sm, reg, uwp, web);
+        PublishEntries(custom, sm, reg, uwp, web, final: true);
         UwpScanned = true;
+        WriteAutoStartReport();   // UWP 状态已定，诊断报告重写一遍（否则永远是「尚未完成」）
     }
 
     static void PublishEntries(List<Entry> custom, List<Entry> sm, List<Entry> reg, List<Entry> uwp,
-        List<Entry>? web = null)
+        List<Entry>? web = null, bool final = false)
     {
         var merged = EntryMerger.Merge(custom, sm, reg, uwp, web);
         _search.SetEntries(merged);
+        // 用量表只增不减会越积越多（卸载/改名的条目永远留着记录）。
+        // 只在**完整扫描结束后**裁剪：第一阶段还没有 UWP 条目，早裁会把 UWP 的用量清空。
+        if (final) PruneUsage(merged);
         if (_win != null)
             Win32.PostMessageW(_win.Hwnd, Win32.WM_APP_SCAN_DONE, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    /// <summary>剔除不再存在的条目的用量记录（扫描线程调用；UsageDb 内部有锁）。</summary>
+    static void PruneUsage(List<Entry> merged)
+    {
+        var keep = new HashSet<string>(merged.Count);
+        foreach (var e in merged) keep.Add(e.UniqueKey);
+        // 只清理「已经不在条目里」且「30 天内没用过」的记录：
+        // 某次扫描少扫了一大批（权限/临时错误）时不会把整份使用历史抹掉。
+        long before = DateTime.UtcNow.Ticks - TimeSpan.FromDays(30).Ticks;
+        if (_usage.PruneTo(keep, before) > 0) ConfigStore.SaveUsage(_usage);
     }
 
     /// <summary>窗口首次显示（幂等）：用于触发 UWP 扫描等延后任务。</summary>
@@ -278,18 +369,46 @@ public static class Program
     }
 
     // ================= 文件夹快捷入口 =================
-    /// <summary>托盘菜单「添加文件夹…」：选目录 → 起名 → 写入 config.json。</summary>
+    /// <summary>托盘菜单「添加文件夹…」：选目录 → 起名 → 写入 config.json。
+    /// 名称窗底部会列出已添加的文件夹（点标签=改成那一条，点 × =删除）。</summary>
     public static void PickAndAddFolder(IntPtr owner)
     {
         // 不把主窗口当对话框的 owner：选择框跑在另一个（STA）线程上，而主窗口在失焦时会
         // 自己隐藏（WM_ACTIVATE → HideWin），被拥有的对话框会跟着消失 → 用户看不到选目录窗口。
         string? dir = FolderPicker.Pick(IntPtr.Zero, "选择要快速进入的文件夹");
         if (string.IsNullOrEmpty(dir)) return;
-        NameDialog.Show("添加文件夹", dir, DefaultFolderName(dir), name =>
+        NameDialog.Show("添加文件夹", dir, DefaultFolderName(dir),
+            (name, path) => AddFolder(name, path),
+            FolderEntries, RemoveFolder);
+    }
+
+    /// <summary>
+    /// 已添加的文件夹快捷入口快照（供名称窗底部标签行展示）。
+    /// 判定与 Scanners.ScanCustom 一致：显式 IsFolder，或路径确实是存在的目录（兼容旧配置）。
+    /// </summary>
+    public static List<CustomEntry> FolderEntries()
+    {
+        var list = new List<CustomEntry>();
+        foreach (var c in _cfg.Custom)
         {
-            AddFolder(name, dir);
-            return true;
-        });
+            if (string.IsNullOrWhiteSpace(c.Path)) continue;
+            bool isFolder;
+            try { isFolder = c.IsFolder || Directory.Exists(c.Path); }
+            catch { isFolder = c.IsFolder; }
+            if (!isFolder) continue;
+            list.Add(new CustomEntry { Name = c.Name, Path = c.Path, IsFolder = true });
+        }
+        return list;
+    }
+
+    /// <summary>按路径删除一个文件夹快捷入口（名称窗标签行上的 ×）。</summary>
+    public static void RemoveFolder(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return;
+        int n = _cfg.Custom.RemoveAll(c => c.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
+        if (n == 0) return;
+        ConfigStore.SaveConfig(_cfg);
+        StartScan(true);
     }
 
     /// <summary>目录默认显示名：取目录名本身（根目录则用路径）。</summary>
@@ -324,21 +443,31 @@ public static class Program
         return true;
     }
 
-    /// <summary>重命名自定义条目（文件夹快捷入口改名）。</summary>
+    /// <summary>重命名自定义条目（右键菜单「重命名…」；不显示文件夹标签行，只改这一条）。</summary>
     public static void RenameCustom(Entry e)
     {
-        NameDialog.Show("重命名", e.DisplayPath, e.Name, name =>
+        NameDialog.Show("重命名", e.DisplayPath, e.Name, (name, _) =>
         {
             foreach (var c in _cfg.Custom)
             {
                 if (!c.Path.Equals(e.LaunchPath, StringComparison.OrdinalIgnoreCase)) continue;
                 c.Name = name;
                 ConfigStore.SaveConfig(_cfg);
+                // 用量键是「来源:小写名」：改名会让历史用量换键 → 排序立刻跌到谷底。
+                // 把旧键的记录搬到新键上，改名不影响「常用」排序。
+                MigrateUsageKey(e.UniqueKey, EntrySource.Custom + ":" + Entry.NormName(name));
                 StartScan(true);
                 return true;
             }
             return false;
         });
+    }
+
+    /// <summary>把用量记录从一个键搬到另一个键（重命名后保持「常用」排序）。</summary>
+    static void MigrateUsageKey(string oldKey, string newKey)
+    {
+        if (string.Equals(oldKey, newKey, StringComparison.Ordinal)) return;
+        if (_usage.Move(oldKey, newKey)) ConfigStore.SaveUsage(_usage);
     }
 
     // ================= 网站快捷入口 =================
@@ -382,33 +511,13 @@ public static class Program
         StartScan(true);
     }
 
+    /// <summary>托盘菜单「添加程序…」：现代资源管理器风格文件选择器（STA 线程，见 FolderPicker）。</summary>
     public static void PickAndAddFile(IntPtr owner)
     {
-        const int BufChars = 1024;
-        IntPtr buf = Marshal.AllocHGlobal(BufChars * 2);
-        try
-        {
-            Marshal.Copy(new byte[BufChars * 2], 0, buf, BufChars * 2);
-            var ofn = new Win32.OPENFILENAMEW
-            {
-                lStructSize = (uint)Marshal.SizeOf<Win32.OPENFILENAMEW>(),
-                hwndOwner = owner,
-                lpstrFilter = "程序\0*.exe;*.lnk;*.url\0所有文件\0*.*\0",
-                lpstrFile = buf,
-                nMaxFile = BufChars,
-                lpstrTitle = "选择要添加的程序",
-                Flags = Win32.OFN_EXPLORER | Win32.OFN_FILEMUSTEXIST | Win32.OFN_PATHMUSTEXIST | Win32.OFN_HIDEREADONLY,
-            };
-            if (Win32.GetOpenFileNameW(ref ofn))
-            {
-                string? f = Marshal.PtrToStringUni(buf);
-                if (!string.IsNullOrEmpty(f)) AddFiles(new[] { f });
-            }
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(buf);
-        }
+        // 不把主窗口当 owner：选择框跑在另一个（STA）线程上，主窗口失焦时会自己隐藏，
+        // 被拥有的对话框会跟着消失 → 用户看不到选择窗口（同 PickAndAddFolder）。
+        string? f = FolderPicker.PickFile(IntPtr.Zero, "选择要添加的程序");
+        if (!string.IsNullOrEmpty(f)) AddFiles(new[] { f! });
     }
 
     /// <summary>
@@ -487,15 +596,33 @@ public static class Program
                     if (_cfg.AutoStart) { _cfg.AutoStart = false; ConfigStore.SaveConfig(_cfg); }
                     break;
             }
-            // 把自愈过程落到报告文件：用户不用点菜单就能看到「为什么没自启」
+            // 自愈过程落到报告文件：用户不用点菜单就能看到「为什么没自启」。
+            // 注意：写盘放到热键注册之后（WriteAutoStartReport），这里只算不写。
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// 把自启诊断报告写到 %APPDATA%\MiniLaunch\autostart-report.txt（后台线程，不占启动路径）。
+    /// 必须晚于热键注册，否则报告里的「热键 → 已注册/注册失败」永远是失败。
+    /// </summary>
+    static void WriteAutoStartReport()
+    {
+        var t = new Thread(() =>
+        {
             try
             {
                 string path = Path.Combine(Paths.Dir, "autostart-report.txt");
                 File.WriteAllText(path, BuildAutoStartReport());
             }
             catch { }
-        }
-        catch { }
+        })
+        {
+            IsBackground = true,
+            Name = "MiniLaunch.Report",
+            Priority = ThreadPriority.Lowest,
+        };
+        t.Start();
     }
 
     /// <summary>开机自启自愈报告（每次启动写一份到 %APPDATA%\MiniLaunch\autostart-report.txt）。</summary>

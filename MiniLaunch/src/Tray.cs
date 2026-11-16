@@ -62,11 +62,14 @@ public static class Tray
 
     public static void Destroy()
     {
-        if (!_added) return;
-        var n = new Win32.NOTIFYICONDATAW { hWnd = _hwnd, uID = TrayUid };
-        n.cbSize = Marshal.SizeOf<Win32.NOTIFYICONDATAW>();
-        Win32.Shell_NotifyIconW(Win32.NIM_DELETE, ref n);
-        _added = false;
+        // 图标句柄无论 NIM_ADD 成没成功都要释放（没成功时它仍是我们自己的资源）
+        if (_added)
+        {
+            var n = new Win32.NOTIFYICONDATAW { hWnd = _hwnd, uID = TrayUid };
+            n.cbSize = Marshal.SizeOf<Win32.NOTIFYICONDATAW>();
+            Win32.Shell_NotifyIconW(Win32.NIM_DELETE, ref n);
+            _added = false;
+        }
         if (_icon != IntPtr.Zero) { Win32.DestroyIcon(_icon); _icon = IntPtr.Zero; }
     }
 
@@ -74,6 +77,8 @@ public static class Tray
     {
         if (!_added) return;
         var n = MakeNid("MiniLaunch 启动器", showIcon: false);
+        // 图标加载失败时不要把 NIF_ICON 带上：NIM_MODIFY + NIF_ICON + hIcon=0 会把托盘图标**删掉**。
+        if (n.hIcon == IntPtr.Zero) n.uFlags &= ~Win32.NIF_ICON;
         n.uFlags |= Win32.NIF_INFO;
         n.szInfo = text;
         n.szInfoTitle = title;

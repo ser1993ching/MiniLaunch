@@ -10,6 +10,8 @@ internal static class Win32
     // ===== 消息 =====
     public const int WM_NULL = 0x0000;
     public const int WM_CREATE = 0x0001;
+    public const int WM_QUIT = 0x0012;      // GetMessage 返回 0 的唯一信号：绝不能从队列里摘掉
+    public const int WM_CLOSE = 0x0010;
     public const int WM_DESTROY = 0x0002;
     public const int WM_SETICON = 0x0080;
     public const int WM_SIZE = 0x0005;
@@ -268,12 +270,16 @@ internal static class Win32
     public static extern bool IsWindowVisible(IntPtr hWnd);
 
     [DllImport("user32.dll")]
+    public static extern bool IsWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
     public static extern int GetMessageW(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
 
     /// <summary>查看消息队列但不阻塞（等待模态对话框时保持 UI 响应）。</summary>
     [DllImport("user32.dll")]
     public static extern bool PeekMessageW(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax, uint wRemoveMsg);
     public const uint PM_REMOVE = 0x1;
+    public const uint PM_NOREMOVE = 0x0;
 
     [DllImport("user32.dll")]
     public static extern bool TranslateMessage(ref MSG lpMsg);
@@ -329,6 +335,10 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern bool InvalidateRect(IntPtr hWnd, IntPtr lpRect, bool bErase);
 
+    /// <summary>只刷新矩形区域（悬停高亮时避免重画整窗）。</summary>
+    [DllImport("user32.dll", EntryPoint = "InvalidateRect")]
+    public static extern bool InvalidateRectRect(IntPtr hWnd, ref RECT lpRect, bool bErase);
+
     [DllImport("user32.dll")]
     public static extern IntPtr BeginPaint(IntPtr hWnd, out PAINTSTRUCT lpPaint);
 
@@ -355,6 +365,10 @@ internal static class Win32
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern bool SetWindowTextW(IntPtr hWnd, string lpString);
+
+    /// <summary>取窗口文本长度（字符数，不含结尾 0）：比固定 512 缓冲更稳，长查询不会被截断。</summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowTextLengthW(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     public static extern bool TrackMouseEvent(ref TRACKMOUSEEVENT lpEventTrack);

@@ -81,14 +81,31 @@ internal static class Theme
         Win32.DeleteObject(rgn);
     }
 
+    static readonly Dictionary<uint, IntPtr> BrushCache = new();
+    static readonly object BrushLock = new();
+
+    /// <summary>
+    /// 按颜色复用的实心画刷。绘制路径（每帧的 HLine / 地球图标 / 按钮描边）原本每次
+    /// CreateSolidBrush + DeleteObject，属于纯浪费的 GDI 句柄分配；颜色种类是固定的一小撮，
+    /// 直接缓存即可。GDI 对象是进程级的，进程退出时系统回收，所以故意不手工释放。
+    /// </summary>
+    public static IntPtr Brush(uint color)
+    {
+        lock (BrushLock)
+        {
+            if (BrushCache.TryGetValue(color, out var h) && h != IntPtr.Zero) return h;
+            h = Win32.CreateSolidBrush(color);
+            BrushCache[color] = h;
+            return h;
+        }
+    }
+
     /// <summary>1 像素横线。</summary>
     public static void HLine(IntPtr hdc, int x1, int x2, int y, uint color)
     {
         if (x2 <= x1) return;
         var r = new Win32.RECT { L = x1, T = y, R = x2, B = y + 1 };
-        IntPtr br = Win32.CreateSolidBrush(color);
-        Win32.FillRect(hdc, ref r, br);
-        Win32.DeleteObject(br);
+        Win32.FillRect(hdc, ref r, Brush(color));
     }
 
     /// <summary>放大镜图标（圆 + 斜柄）。</summary>
@@ -112,7 +129,7 @@ internal static class Theme
         if (size <= 6) return;
         int d = size;
         IntPtr pen = Win32.CreatePen(Win32.PS_SOLID, Math.Max(1, size / 14), Accent);
-        IntPtr brush = Win32.CreateSolidBrush(Win32.Rgb(0x27, 0x35, 0x5C));
+        IntPtr brush = Brush(Win32.Rgb(0x27, 0x35, 0x5C));
         IntPtr oldPen = Win32.SelectObject(hdc, pen);
         IntPtr oldBrush = Win32.SelectObject(hdc, brush);
         // 圆盘（填充 + 外圈）
@@ -125,8 +142,7 @@ internal static class Theme
         Win32.SelectObject(hdc, oldNull);
         Win32.SelectObject(hdc, oldBrush);
         Win32.SelectObject(hdc, oldPen);
-        Win32.DeleteObject(brush);
-        Win32.DeleteObject(pen);
+        Win32.DeleteObject(pen);   // 画刷走缓存，不删
     }
 
     // ===== 文本 =====
@@ -159,6 +175,152 @@ internal static class Theme
         Win32.DrawTextW(hdc, text, -1, ref tr, AlignCenter);
         Win32.SelectObject(hdc, old);
         return x + w;
+    }
+
+    // ===== 字体 / 按钮（三个自绘窗口共用，避免四处拷贝）=====
+
+    /// <summary>UI 字体名（三处小窗原各自写了一遍字符串）。</summary>
+    public const string UiFont = "Microsoft YaHei UI";
+
+    /// <summary>按 DPI 缩放创建字体（调用方负责 DeleteObject）。</summary>
+    public static IntPtr MakeFont(string face, int px, int weight, float scale) =>
+        Win32.CreateFontW(-(int)Math.Round(px * scale), 0, 0, 0, weight, 0, 0, 0,
+            Win32.DEFAULT_CHARSET, Win32.OUT_DEFAULT_PRECIS, Win32.CLIP_DEFAULT_PRECIS,
+            Win32.CLEARTYPE_QUALITY, Win32.DEFAULT_PITCH | Win32.FF_SWISS, face);
+
+    /// <summary>
+    /// 小窗底部按钮布局（客户端坐标）[x, y, w, h] × 2，顺序：取消、确定。
+    /// NameDialog / WebDialog 的按钮尺寸完全一致，抽到这里只留一份。
+    /// </summary>
+    public static int[] DialogButtonLayout(int clientW, int clientH, float scale)
+    {
+        int pad = (int)Math.Round(22 * scale);
+        int btnH = (int)Math.Round(30 * scale);
+        int okW = (int)Math.Round(88 * scale);
+        int cancelW = (int)Math.Round(76 * scale);
+        int gap = (int)Math.Round(10 * scale);
+        int okX = clientW - pad - okW;
+        int cancelX = okX - gap - cancelW;
+        int y = clientH - pad - btnH;
+        return new[] { cancelX, y, cancelW, btnH, okX, y, okW, btnH };
+    }
+
+    /// <summary>按钮命中测试：0 = 取消、1 = 确定、-1 = 没命中。</summary>
+    public static int HitDialogButton(int clientW, int clientH, float scale, int mx, int my)
+    {
+        var r = DialogButtonLayout(clientW, clientH, scale);
+        for (int i = 0; i < 2; i++)
+        {
+            int x = r[i * 4], y = r[i * 4 + 1], w = r[i * 4 + 2], h = r[i * 4 + 3];
+            if (mx >= x && mx < x + w && my >= y && my < y + h) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>画一个自绘按钮：主按钮（确定）用渐变，次按钮（取消）用描边。含悬停/按下反馈。</summary>
+    public static void DrawButton(IntPtr hdc, int[] lay, int index, string text, bool primary,
+        bool hover, bool pressed, IntPtr font, float scale)
+    {
+        int x = lay[index * 4], y = lay[index * 4 + 1], w = lay[index * 4 + 2], h = lay[index * 4 + 3];
+        int radius = (int)Math.Round(8 * scale);
+        int dy = pressed ? 1 : 0;   // 按下时整体下移 1px
+
+        var rc = new Win32.RECT { L = x, T = y + dy, R = x + w, B = y + h + dy };
+        if (primary)
+        {
+            uint top = pressed ? SelBottom : (hover ? Win32.Rgb(0x6E, 0x8C, 0xFF) : SelTop);
+            uint bot = pressed ? Win32.Rgb(0x2F, 0x4A, 0xB8) : (hover ? Win32.Rgb(0x4E, 0x6B, 0xE8) : SelBottom);
+            FillRoundGradient(hdc, rc, radius, top, bot);
+        }
+        else
+        {
+            uint bg = pressed ? Win32.Rgb(0x22, 0x24, 0x2C) : (hover ? Hover : Surface);
+            // 圆角描边：先画外扩一圈的边框色，再画内圈底色（顺序反了会把底色盖没，见坑 #37）
+            var outer = new Win32.RECT { L = rc.L - 1, T = rc.T - 1, R = rc.R + 1, B = rc.B + 1 };
+            FillRoundSolid(hdc, outer, radius + 1, Brush(SurfaceBorder));
+            FillRoundSolid(hdc, rc, radius, Brush(bg));
+        }
+
+        Win32.SelectObject(hdc, font);
+        Win32.SetTextColor(hdc, (int)(primary ? TextOnSel : TextMain));
+        var tr = new Win32.RECT { L = rc.L, T = rc.T, R = rc.R, B = rc.B };
+        Win32.DrawTextW(hdc, text, -1, ref tr, AlignCenter);
+    }
+
+    /// <summary>
+    /// 双缓冲绘制：在内存 DC 上画完再一次性 BitBlt 到窗口（三个窗口的 OnPaint 都这么写）。
+    /// 内建 try/finally：绘制中途抛异常也不会漏掉 DC/位图（否则就是漏 GDI 句柄）。
+    /// </summary>
+    public static void BufferedPaint(IntPtr hwnd, Action<IntPtr, int, int> draw)
+    {
+        IntPtr hdc = Win32.BeginPaint(hwnd, out var ps);
+        try
+        {
+            Win32.GetClientRect(hwnd, out var rc);
+            int cx = rc.Width, cy = rc.Height;
+            if (cx <= 0 || cy <= 0) return;
+
+            IntPtr mem = Win32.CreateCompatibleDC(hdc);
+            IntPtr bmp = Win32.CreateCompatibleBitmap(hdc, cx, cy);
+            if (mem == IntPtr.Zero || bmp == IntPtr.Zero)
+            {
+                if (bmp != IntPtr.Zero) Win32.DeleteObject(bmp);
+                if (mem != IntPtr.Zero) Win32.DeleteDC(mem);
+                return;
+            }
+            IntPtr oldBmp = Win32.SelectObject(mem, bmp);
+            try
+            {
+                draw(mem, cx, cy);
+                Win32.BitBlt(hdc, 0, 0, cx, cy, mem, 0, 0, Win32.SRCCOPY);
+            }
+            finally
+            {
+                Win32.SelectObject(mem, oldBmp);
+                Win32.DeleteObject(bmp);
+                Win32.DeleteDC(mem);
+            }
+        }
+        finally
+        {
+            Win32.EndPaint(hwnd, ref ps);
+        }
+    }
+
+    /// <summary>
+    /// 画一个 1px 圆角描边框（先外圈描边色、再内圈底色），返回内圈矩形。
+    /// 为什么必须这样画：框里坐的是原生 EDIT 子窗口，它是**方角**的，并且会自己填底色。
+    /// 若只画一块实心圆角矩形（或只画外圈）让 EDIT 去盖内部，EDIT 的方角会把四角弧线切掉，
+    /// 视觉上就是四个「缺角」。正确做法：父窗口把描边 + 底色都画完，EDIT 再内缩坐在里面。
+    /// </summary>
+    public static Win32.RECT RoundBorderBox(IntPtr hdc, in Win32.RECT box, int radius, uint bg)
+    {
+        FillRoundSolid(hdc, box, radius, Brush(SurfaceBorder));
+        var inner = new Win32.RECT { L = box.L + 1, T = box.T + 1, R = box.R - 1, B = box.B - 1 };
+        FillRoundSolid(hdc, inner, Math.Max(2, radius - 1), Brush(bg));
+        return inner;
+    }
+
+    /// <summary>
+    /// 单行输入框的几何（外框 + 内部 EDIT）。两个自绘小窗共用一套算法，避免「一个缺角、一个偏心」。
+    /// · 外框：由调用方用 RoundBorderBox 画 1px 圆角描边；
+    /// · EDIT：左右各内缩 3px、上下居中，保证它的方角永远落在内圈圆角弧线之外；
+    /// · 垂直居中：单行 EDIT 的文字贴客户区顶部（EM_SETRECT 只对多行有效，见坑 #16），
+    ///   所以控件高度取行高（~22px），再整体下移 1px 补偿 EDIT 内 ~3px 的顶距。
+    /// </summary>
+    public static (Win32.RECT Box, Win32.RECT Edit) SingleLineField(
+        int left, int right, int top, int height, float scale)
+    {
+        int px = Math.Max(1, (int)Math.Round(scale));
+        var box = new Win32.RECT { L = left, T = top, R = right, B = top + height };
+
+        int editH = (int)Math.Round(22 * scale);
+        int maxH = height - 4 * px;
+        if (editH > maxH) editH = Math.Max(px * 4, maxH);   // 框很矮时（小 DPI）至少留出上下边距
+        int editTop = (box.T + box.B) / 2 - editH / 2 + px;  // +1px 补偿 EDIT 内部顶距
+        int inset = 3 * px;
+        var edit = new Win32.RECT { L = box.L + inset, T = editTop, R = box.R - inset, B = editTop + editH };
+        return (box, edit);
     }
 
     /// <summary>Win11 圆角 + 深色标题栏（不支持的版本静默忽略）。</summary>

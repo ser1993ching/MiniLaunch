@@ -21,8 +21,6 @@ public sealed class HotkeyDialog
     float _scale = 1f;
     int _w, _h, _pad, _capH, _capPadX, _capGap;
     IntPtr _fontTitle, _fontHint, _fontKey, _fontSmall, _bCap;
-
-    bool _captured;
     uint _mods, _vk;
     string _error = "";
 
@@ -85,17 +83,12 @@ public sealed class HotkeyDialog
 
     void CreateFonts()
     {
-        _fontTitle = MakeFont(16, Win32.FW_SEMIBOLD);
-        _fontHint = MakeFont(13, Win32.FW_NORMAL);
-        _fontKey = MakeFont(15, Win32.FW_SEMIBOLD);
-        _fontSmall = MakeFont(12, Win32.FW_NORMAL);
+        _fontTitle = Theme.MakeFont(Theme.UiFont, 16, Win32.FW_SEMIBOLD, _scale);
+        _fontHint = Theme.MakeFont(Theme.UiFont, 13, Win32.FW_NORMAL, _scale);
+        _fontKey = Theme.MakeFont(Theme.UiFont, 15, Win32.FW_SEMIBOLD, _scale);
+        _fontSmall = Theme.MakeFont(Theme.UiFont, 12, Win32.FW_NORMAL, _scale);
         _bCap = Win32.CreateSolidBrush(Theme.KeyCapBg);
     }
-
-    IntPtr MakeFont(int px, int weight) =>
-        Win32.CreateFontW(-Scale(px), 0, 0, 0, weight, 0, 0, 0,
-            Win32.DEFAULT_CHARSET, Win32.OUT_DEFAULT_PRECIS, Win32.CLIP_DEFAULT_PRECIS,
-            Win32.CLEARTYPE_QUALITY, Win32.DEFAULT_PITCH | Win32.FF_SWISS, "Microsoft YaHei UI");
 
     void DestroyRes()
     {
@@ -193,7 +186,8 @@ public sealed class HotkeyDialog
     {
         if (vk == Win32.VK_ESCAPE) { Close(); return; }
         if (HotkeyParser.IsModifierKey(vk)) return;      // 只按修饰键不算
-        if (vk == Win32.VK_RETURN) { if (_captured) Commit(); return; }
+        // 按下即生效，Enter 不参与确认（以前这里有个 _captured 判断，是永远走不到的死分支）
+        if (vk == Win32.VK_RETURN) return;
 
         uint mods = HotkeyParser.ModsFromKeyboard();
         // Alt+F4 是标准关闭手势：吞掉它会静默把全局热键改成 Alt+F4 并写盘（回归：IsCloseGesture 断言）
@@ -201,13 +195,11 @@ public sealed class HotkeyDialog
         if (mods == 0)
         {
             _error = "需要同时按住 Ctrl / Alt / Shift / Win 中至少一个";
-            _captured = false;
             Win32.InvalidateRect(Hwnd, IntPtr.Zero, false);
             return;
         }
         _mods = mods;
         _vk = (uint)vk;
-        _captured = true;
         _error = "";
         Win32.InvalidateRect(Hwnd, IntPtr.Zero, false);
         Commit();
@@ -218,88 +210,64 @@ public sealed class HotkeyDialog
         string text = HotkeyParser.Format(_mods, _vk);
         if (_apply(text)) { Close(); return; }
         _error = $"“{text}”已被占用，换一个组合";
-        _captured = false;
         Win32.InvalidateRect(Hwnd, IntPtr.Zero, false);
     }
 
     // ================= 绘制 =================
-    void OnPaint()
+    void OnPaint() => Theme.BufferedPaint(Hwnd, DrawContent);
+
+    void DrawContent(IntPtr mem, int cx, int cy)
     {
-        IntPtr hdc = Win32.BeginPaint(Hwnd, out var ps);
-        try
+        var all = new Win32.RECT { L = 0, T = 0, R = cx, B = cy };
+        Theme.GradientV(mem, all, Theme.BgTop, Theme.BgBottom);
+        Win32.SetBkMode(mem, Win32.TRANSPARENT);
+
+        // 标题
+        Win32.SelectObject(mem, _fontTitle);
+        Win32.SetTextColor(mem, (int)Theme.TextMain);
+        var rTitle = new Win32.RECT { L = _pad, T = _pad, R = cx - _pad, B = _pad + Scale(24) };
+        Win32.DrawTextW(mem, "设置热键", -1, ref rTitle, Theme.AlignLeft);
+
+        // 副标题
+        Win32.SelectObject(mem, _fontHint);
+        Win32.SetTextColor(mem, (int)Theme.TextSub);
+        int hy = _pad + Scale(28);
+        var rHint = new Win32.RECT { L = _pad, T = hy, R = cx - _pad, B = hy + Scale(20) };
+        Win32.DrawTextW(mem, "直接按下想要的组合键（按下即生效）", -1, ref rHint, Theme.AlignLeft);
+
+        // 组合键：按键帽居中排列，帽间用“+”连接（按下即生效，所以这里永远是当前热键）
+        string[] caps = Program.Cfg.Hotkey.Split('+');
+        int plusW = Theme.MeasureText(mem, _fontHint, "+");
+        int totalW = 0;
+        foreach (var c in caps) totalW += Theme.MeasureText(mem, _fontKey, c) + _capPadX * 2;
+        if (caps.Length > 1) totalW += (caps.Length - 1) * (plusW + _capGap * 2);
+        int x = (cx - totalW) / 2;
+        int cy2 = _pad + Scale(58);
+        for (int i = 0; i < caps.Length; i++)
         {
-            Win32.GetClientRect(Hwnd, out var rc);
-            int cx = rc.Width, cy = rc.Height;
-            if (cx <= 0 || cy <= 0) return;
-
-            IntPtr mem = Win32.CreateCompatibleDC(hdc);
-            IntPtr bmp = Win32.CreateCompatibleBitmap(hdc, cx, cy);
-            IntPtr oldBmp = Win32.SelectObject(mem, bmp);
-
-            var all = new Win32.RECT { L = 0, T = 0, R = cx, B = cy };
-            Theme.GradientV(mem, all, Theme.BgTop, Theme.BgBottom);
-            Win32.SetBkMode(mem, Win32.TRANSPARENT);
-
-            // 标题
-            Win32.SelectObject(mem, _fontTitle);
-            Win32.SetTextColor(mem, (int)Theme.TextMain);
-            var rTitle = new Win32.RECT { L = _pad, T = _pad, R = cx - _pad, B = _pad + Scale(24) };
-            Win32.DrawTextW(mem, "设置热键", -1, ref rTitle, Theme.AlignLeft);
-
-            // 副标题
-            Win32.SelectObject(mem, _fontHint);
-            Win32.SetTextColor(mem, (int)Theme.TextSub);
-            int hy = _pad + Scale(28);
-            var rHint = new Win32.RECT { L = _pad, T = hy, R = cx - _pad, B = hy + Scale(20) };
-            // _captured 只是按下到应用成功/失败之间的瞬态（按下即生效，不经 Enter），
-            // 绘制时不会处于 _captured 状态，文案固定为提示「按下即生效」。
-            Win32.DrawTextW(mem, "直接按下想要的组合键（按下即生效）", -1, ref rHint, Theme.AlignLeft);
-
-            // 组合键：按键帽居中排列，帽间用“+”连接
-            string[] caps = _captured
-                ? HotkeyParser.Format(_mods, _vk).Split('+')
-                : Program.Cfg.Hotkey.Split('+');
-            int plusW = Theme.MeasureText(mem, _fontHint, "+");
-            int totalW = 0;
-            foreach (var c in caps) totalW += Theme.MeasureText(mem, _fontKey, c) + _capPadX * 2;
-            if (caps.Length > 1) totalW += (caps.Length - 1) * (plusW + _capGap * 2);
-            int x = (cx - totalW) / 2;
-            int cy2 = _pad + Scale(58);
-            for (int i = 0; i < caps.Length; i++)
+            x = Theme.DrawKeyCap(mem, x, cy2, _capH, caps[i], _fontKey, _bCap, Theme.KeyCapText, _capPadX);
+            if (i < caps.Length - 1)
             {
-                x = Theme.DrawKeyCap(mem, x, cy2, _capH, caps[i], _fontKey, _bCap, Theme.KeyCapText, _capPadX);
-                if (i < caps.Length - 1)
-                {
-                    Win32.SelectObject(mem, _fontHint);
-                    Win32.SetTextColor(mem, (int)Theme.TextSub);
-                    var rPlus = new Win32.RECT { L = x + _capGap, T = cy2, R = x + _capGap + plusW, B = cy2 + _capH };
-                    Win32.DrawTextW(mem, "+", -1, ref rPlus, Theme.AlignCenter);
-                    x += plusW + _capGap * 2;
-                }
+                Win32.SelectObject(mem, _fontHint);
+                Win32.SetTextColor(mem, (int)Theme.TextSub);
+                var rPlus = new Win32.RECT { L = x + _capGap, T = cy2, R = x + _capGap + plusW, B = cy2 + _capH };
+                Win32.DrawTextW(mem, "+", -1, ref rPlus, Theme.AlignCenter);
+                x += plusW + _capGap * 2;
             }
-
-            // 错误提示 / 底部说明
-            Win32.SelectObject(mem, _fontSmall);
-            if (_error.Length > 0)
-            {
-                Win32.SetTextColor(mem, (int)Theme.Warn);
-                int ey = cy2 + _capH + Scale(18);
-                var rErr = new Win32.RECT { L = _pad, T = ey, R = cx - _pad, B = ey + Scale(18) };
-                Win32.DrawTextW(mem, _error, -1, ref rErr, Theme.AlignCenter);
-            }
-            Win32.SetTextColor(mem, (int)Theme.TextSub);
-            int by = cy - _pad - Scale(16);
-            var rBot = new Win32.RECT { L = _pad, T = by, R = cx - _pad, B = by + Scale(16) };
-            Win32.DrawTextW(mem, "Esc 取消  ·  设置保存在 config.json", -1, ref rBot, Theme.AlignCenter);
-
-            Win32.BitBlt(hdc, 0, 0, cx, cy, mem, 0, 0, Win32.SRCCOPY);
-            Win32.SelectObject(mem, oldBmp);
-            Win32.DeleteObject(bmp);
-            Win32.DeleteDC(mem);
         }
-        finally
+
+        // 错误提示 / 底部说明
+        Win32.SelectObject(mem, _fontSmall);
+        if (_error.Length > 0)
         {
-            Win32.EndPaint(Hwnd, ref ps);
+            Win32.SetTextColor(mem, (int)Theme.Warn);
+            int ey = cy2 + _capH + Scale(18);
+            var rErr = new Win32.RECT { L = _pad, T = ey, R = cx - _pad, B = ey + Scale(18) };
+            Win32.DrawTextW(mem, _error, -1, ref rErr, Theme.AlignCenter);
         }
+        Win32.SetTextColor(mem, (int)Theme.TextSub);
+        int by = cy - _pad - Scale(16);
+        var rBot = new Win32.RECT { L = _pad, T = by, R = cx - _pad, B = by + Scale(16) };
+        Win32.DrawTextW(mem, "Esc 取消  ·  设置保存在 config.json", -1, ref rBot, Theme.AlignCenter);
     }
 }

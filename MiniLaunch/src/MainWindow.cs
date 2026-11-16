@@ -33,6 +33,11 @@ public sealed class MainWindow
     Entry[] _results = Array.Empty<Entry>();
     int _sel, _offset = -1, _hover = -1;
     bool _trackMouse;
+    /// <summary>置位时忽略 EDIT 的 EN_CHANGE（ShowWin 清空搜索框时用，避免一次呼出跑两遍查询）。</summary>
+    bool _suppressRequery;
+    /// <summary>双缓冲缓存（每帧新建整窗 DIB 太浪费：720×568×4 ≈ 1.6MB/帧）。</summary>
+    IntPtr _memDC, _memBmp;
+    int _memW, _memH;
 
     /// <summary>预览模式（--preview 启动）：不因失焦自动隐藏，便于截图与界面调试。</summary>
     public bool PreviewMode;
@@ -115,7 +120,9 @@ public sealed class MainWindow
 
         Win32.ShowWindow(Hwnd, Win32.SW_SHOW);
         ForceForeground();
-        Win32.SetWindowTextW(_edit, "");
+        // 清空搜索框：WM_SETTEXT 会派生 EN_CHANGE → Requery，先置标记避免重复跑一遍查询
+        _suppressRequery = true;
+        try { Win32.SetWindowTextW(_edit, ""); } finally { _suppressRequery = false; }
         Requery();
         if (Win32.SetFocus(_edit) == IntPtr.Zero) { /* 前台切换失败时下次点击仍有焦点 */ }
     }
@@ -167,8 +174,11 @@ public sealed class MainWindow
 
     public void Requery()
     {
-        var sb = new StringBuilder(512);
-        Win32.GetWindowTextW(_edit, sb, 512);
+        // 用实际长度分配缓冲：固定 512 会把长查询截断（粘贴一大串路径时搜不到尾部）
+        int len = Win32.GetWindowTextLengthW(_edit);
+        if (len < 0) len = 0;
+        var sb = new StringBuilder(len + 1);
+        Win32.GetWindowTextW(_edit, sb, len + 1);
         string text = sb.ToString();
         int max = Math.Max(_cfg.MaxResults, VisibleRows) * 3;
         _results = _search.Query(text, max).ToArray();
@@ -216,9 +226,7 @@ public sealed class MainWindow
     int Scale(int v) => (int)Math.Round(v * _scale);
 
     static IntPtr MakeFont(int px, int weight, float scale) =>
-        Win32.CreateFontW(-(int)Math.Round(px * scale), 0, 0, 0, weight, 0, 0, 0,
-            Win32.DEFAULT_CHARSET, Win32.OUT_DEFAULT_PRECIS, Win32.CLIP_DEFAULT_PRECIS,
-            Win32.CLEARTYPE_QUALITY, Win32.DEFAULT_PITCH | Win32.FF_SWISS, "Microsoft YaHei UI");
+        Theme.MakeFont(Theme.UiFont, px, weight, scale);
 
     void CreateFonts()
     {
@@ -250,6 +258,7 @@ public sealed class MainWindow
         _brushBorder = Win32.CreateSolidBrush(Theme.SurfaceBorder);
     }
 
+    // 注：只在 WM_DESTROY 调用一次，不必为此加缓存字段
     IntPtr[] Brushes => new[] { _brushHover, _brushSel, _brushEditBg, _brushCap, _brushTrack, _brushThumb, _brushBorder };
 
     // ================= 窗口过程 =================
@@ -312,8 +321,14 @@ public sealed class MainWindow
                 return IntPtr.Zero;
 
             case Win32.WM_COMMAND:
-                if (Win32.LOWORD(w) == EditId && Win32.HIWORD(w) == Win32.EN_CHANGE)
+                if (Win32.LOWORD(w) == EditId && Win32.HIWORD(w) == Win32.EN_CHANGE && !_suppressRequery)
                     Requery();
+                return IntPtr.Zero;
+
+            case Win32.WM_CLOSE:
+                // 常驻启动器：Alt+F4 / 系统关闭只隐藏，不退出（退出走托盘菜单，否则热键+托盘全没了，
+                // 用户会以为程序「自己消失了」）。
+                HideWin();
                 return IntPtr.Zero;
 
             case Win32.WM_APP_SHOW:
@@ -412,8 +427,11 @@ public sealed class MainWindow
                 int hv = HitRow(l);
                 if (hv != _hover)
                 {
+                    int old = _hover;
                     _hover = hv;
-                    Win32.InvalidateRect(h, IntPtr.Zero, false);
+                    // 只重画变化的两行（悬停态只影响背景），不必重画整窗渐变
+                    InvalidateRow(h, old);
+                    InvalidateRow(h, hv);
                 }
                 return IntPtr.Zero;
             }
@@ -442,6 +460,7 @@ public sealed class MainWindow
                 break;
 
             case Win32.WM_DESTROY:
+                ReleaseBuffer();
                 DeleteFonts();
                 foreach (var b in Brushes)
                     if (b != IntPtr.Zero) Win32.DeleteObject(b);
@@ -624,6 +643,15 @@ public sealed class MainWindow
         _rescan();
     }
 
+    /// <summary>只刷新第 idx 行（不在可视范围内则忽略）。</summary>
+    void InvalidateRow(IntPtr h, int idx)
+    {
+        if (idx < 0 || idx < _offset || idx >= _offset + VisibleRows) return;
+        int y = _listTop + (idx - _offset) * _rowH;
+        var r = new Win32.RECT { L = _pad, T = y, R = _w - _pad, B = y + _rowH };
+        Win32.InvalidateRectRect(h, ref r, false);
+    }
+
     // ================= 绘制 =================
     void OnPaint()
     {
@@ -634,21 +662,43 @@ public sealed class MainWindow
             int cx = rc.Width, cy = rc.Height;
             if (cx <= 0 || cy <= 0) return;
 
-            IntPtr mem = Win32.CreateCompatibleDC(hdc);
-            IntPtr bmp = Win32.CreateCompatibleBitmap(hdc, cx, cy);
-            IntPtr oldBmp = Win32.SelectObject(mem, bmp);
+            IntPtr mem = GetBufferDc(hdc, cx, cy);
+            if (mem == IntPtr.Zero) return;
 
             DrawAll(mem, cx, cy);
 
             Win32.BitBlt(hdc, 0, 0, cx, cy, mem, 0, 0, Win32.SRCCOPY);
-            Win32.SelectObject(mem, oldBmp);
-            Win32.DeleteObject(bmp);
-            Win32.DeleteDC(mem);
         }
         finally
         {
             Win32.EndPaint(Hwnd, ref ps);
         }
+    }
+
+    /// <summary>取双缓冲 DC（尺寸变化时重建；只在本窗口存活期间缓存）。</summary>
+    IntPtr GetBufferDc(IntPtr hdc, int cx, int cy)
+    {
+        if (_memDC != IntPtr.Zero && _memW == cx && _memH == cy) return _memDC;
+        ReleaseBuffer();
+        _memDC = Win32.CreateCompatibleDC(hdc);
+        _memBmp = Win32.CreateCompatibleBitmap(hdc, cx, cy);
+        if (_memDC == IntPtr.Zero || _memBmp == IntPtr.Zero)
+        {
+            ReleaseBuffer();
+            return IntPtr.Zero;
+        }
+        Win32.SelectObject(_memDC, _memBmp);
+        _memW = cx;
+        _memH = cy;
+        return _memDC;
+    }
+
+    void ReleaseBuffer()
+    {
+        // 先删 DC（把位图从 DC 里摘下来）再删位图，否则位图仍被选中时无法释放
+        if (_memDC != IntPtr.Zero) { Win32.DeleteDC(_memDC); _memDC = IntPtr.Zero; }
+        if (_memBmp != IntPtr.Zero) { Win32.DeleteObject(_memBmp); _memBmp = IntPtr.Zero; }
+        _memW = _memH = 0;
     }
 
     void DrawAll(IntPtr hdc, int cx, int cy)
@@ -835,7 +885,7 @@ public sealed class MainWindow
     {
         if (s.Length <= max) return s;
         int start = s.Length - (max - 2);
-        if (s.IndexOf('\\', 0) >= 0)
+        if (s.Contains('\\'))
         {
             // 路径：从后面往前保留完整目录段，避免把词切断（如 “…\nsys 2022 R2” ）
             int sep = s.IndexOf('\\', start);

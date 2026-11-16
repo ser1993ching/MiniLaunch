@@ -71,31 +71,54 @@ public static class FolderPicker
         if (p != IntPtr.Zero) { try { Marshal.Release(p); } catch { } }
     }
 
+    // ===== 选文件夹 / 选文件共用同一套（现代 IFileOpenDialog + STA 线程）=====
+
     /// <summary>弹出文件夹选择对话框；返回选中目录的绝对路径，取消返回 null。</summary>
-    public static string? Pick(IntPtr owner, string title)
+    public static string? Pick(IntPtr owner, string title) =>
+        RunOnStaThread(() => PickCore(owner, title, PickKind.Folder));
+
+    /// <summary>
+    /// 选择文件（托盘「添加程序…」）。以前用 comdlg32 的 GetOpenFileNameW：
+    /// ① 是 Win95 时代的老对话框，与「选文件夹」的现代风格不一致；
+    /// ② 在 MTA 主线程上同步调用，与坑 #28 的结论（shell 对话框必须在 STA 线程）相背。
+    /// 现在复用选文件夹的同一套实现，只把 FILEOPENDIALOGOPTIONS 换成「选文件」。
+    /// </summary>
+    public static string? PickFile(IntPtr owner, string title) =>
+        RunOnStaThread(() => PickCore(owner, title, PickKind.File));
+
+    enum PickKind { Folder, File }
+
+    /// <summary>把阻塞式 shell 对话框放到 STA 线程上跑，本线程泵消息等待。</summary>
+    static string? RunOnStaThread(Func<string?> work)
     {
         if (Thread.CurrentThread.GetApartmentState() == ApartmentState.STA)
-            return PickCore(owner, title);
+            return work();
 
         string? result = null;
         Exception? err = null;
         var t = new Thread(() =>
         {
-            try { result = PickCore(owner, title); }
+            try { result = work(); }
             catch (Exception ex) { err = ex; }
         })
         {
             IsBackground = true,
-            Name = "MiniLaunch.FolderPicker",
+            Name = "MiniLaunch.ShellPicker",
         };
         t.SetApartmentState(ApartmentState.STA);   // 必须在启动线程前设置
         t.Start();
 
-        // 等待期间继续泵消息：对话框在另一个线程上跑模态循环，本线程不能停摆
+        // 等待期间继续泵消息：对话框在另一个线程上跑模态循环，本线程不能停摆。
+        // 关键：WM_QUIT 必须**留在队列里**（先用 PM_NOREMOVE 看一眼，见到就收手）。
+        // 一旦用 PM_REMOVE 把它摘掉，DispatchMessage(WM_QUIT) 什么也不做 → 退出信号丢失，
+        // 外层 GetMessageW 永远阻塞：窗口已销毁却仍占着单实例 Mutex，
+        // 用户之后双击 exe 完全没反应，只能去任务管理器杀进程。
         while (t.IsAlive)
         {
-            while (Win32.PeekMessageW(out var msg, IntPtr.Zero, 0, 0, Win32.PM_REMOVE))
+            while (Win32.PeekMessageW(out var msg, IntPtr.Zero, 0, 0, Win32.PM_NOREMOVE))
             {
+                if (msg.message == Win32.WM_QUIT) return null;   // 退出信号交给外层 RunLoop
+                if (!Win32.PeekMessageW(out msg, IntPtr.Zero, 0, 0, Win32.PM_REMOVE)) break;
                 Win32.TranslateMessage(ref msg);
                 Win32.DispatchMessageW(ref msg);
             }
@@ -106,7 +129,7 @@ public static class FolderPicker
     }
 
     /// <summary>在 STA 线程上执行真正的对话框调用。</summary>
-    static string? PickCore(IntPtr owner, string title)
+    static string? PickCore(IntPtr owner, string title, PickKind kind)
     {
         // 本线程必须先初始化成 STA，否则 shell 对话框会创建却不显示
         bool comInit = false;
@@ -114,10 +137,10 @@ public static class FolderPicker
         catch { comInit = false; }
         try
         {
-            // 优先用现代对话框；系统不支持（极老的 Windows）时退回旧树形窗
-            if (TryCreateModernDialog(out IntPtr dlg))
+            // 优先用现代对话框；系统不支持（极老的 Windows）时退回旧版对话框
+            if (TryCreateModernDialog(kind, out IntPtr dlg))
                 return RunModernDialog(dlg, owner);
-            return PickLegacy(owner, title);
+            return PickLegacy(owner, title, kind);
         }
         finally
         {
@@ -125,8 +148,8 @@ public static class FolderPicker
         }
     }
 
-    /// <summary>创建现代文件夹选择对话框对象（CLSID_FileOpenDialog）。成功时返回裸指针，调用方负责 Release。</summary>
-    static bool TryCreateModernDialog(out IntPtr dlg)
+    /// <summary>创建现代对话框对象（CLSID_FileOpenDialog）。成功时返回裸指针，调用方负责 Release。</summary>
+    static bool TryCreateModernDialog(PickKind kind, out IntPtr dlg)
     {
         dlg = IntPtr.Zero;
         try
@@ -138,13 +161,14 @@ public static class FolderPicker
             if (hr < 0 || ppv == IntPtr.Zero) return false;
             dlg = ppv;
 
-            // 设为「只选文件夹」模式（选项必须能被 shell 接受，否则会退化成文件选择）
+            // 选项必须能被 shell 接受，否则会退化成错误模式
             if (Vtable<GetOptionsFn>(dlg, SlotGetOptions)(dlg, out uint opts) < 0)
             {
                 ReleaseCom(dlg); dlg = IntPtr.Zero;
                 return false;
             }
-            opts |= FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_NOCHANGEDIR;
+            opts |= FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_NOCHANGEDIR;
+            if (kind == PickKind.Folder) opts |= FOS_PICKFOLDERS;
             if (Vtable<SetOptionsFn>(dlg, SlotSetOptions)(dlg, opts) < 0)
             {
                 ReleaseCom(dlg); dlg = IntPtr.Zero;
@@ -196,9 +220,11 @@ public static class FolderPicker
         }
     }
 
-    /// <summary>旧版树形对话框（SHBrowseForFolder）——仅作为现代对话框不可用时的兜底。</summary>
-    static string? PickLegacy(IntPtr owner, string title)
+    /// <summary>旧版对话框——仅作为现代对话框不可用时的兜底（选目录=树形窗，选文件=打开文件窗）。</summary>
+    static string? PickLegacy(IntPtr owner, string title, PickKind kind)
     {
+        if (kind == PickKind.File) return PickFileLegacy(owner, title);
+
         IntPtr dispName = IntPtr.Zero;
         try
         {
@@ -235,8 +261,35 @@ public static class FolderPicker
         }
     }
 
-    /// <summary>自检用：确认系统能创建现代文件夹选择对话框（IFileDialog 可用）。</summary>
-    public static bool CanCreateModernDialog()
+    /// <summary>旧版选文件对话框（GetOpenFileNameW），仅供现代对话框不可用的老系统兑底。</summary>
+    static string? PickFileLegacy(IntPtr owner, string title)
+    {
+        const int BufChars = 1024;
+        IntPtr buf = Marshal.AllocHGlobal(BufChars * 2);
+        try
+        {
+            // 清零：shell 会把这块缓冲当 C 字符串读，脏数据会导致随机文件名
+            Marshal.Copy(new byte[BufChars * 2], 0, buf, BufChars * 2);
+            var ofn = new Win32.OPENFILENAMEW
+            {
+                lStructSize = (uint)Marshal.SizeOf<Win32.OPENFILENAMEW>(),
+                hwndOwner = owner,
+                lpstrFilter = "程序\0*.exe;*.lnk;*.url\0所有文件\0*.*\0",
+                lpstrFile = buf,
+                nMaxFile = BufChars,
+                lpstrTitle = title,
+                Flags = Win32.OFN_EXPLORER | Win32.OFN_FILEMUSTEXIST | Win32.OFN_PATHMUSTEXIST | Win32.OFN_HIDEREADONLY,
+            };
+            if (!Win32.GetOpenFileNameW(ref ofn)) return null;
+            string? f = Marshal.PtrToStringUni(buf);
+            return string.IsNullOrEmpty(f) ? null : f;
+        }
+        catch { return null; }
+        finally { Marshal.FreeHGlobal(buf); }
+    }
+
+    /// <summary>自检用：确认系统能创建现代对话框（IFileDialog 可用）。fileMode=true 时验「选文件」模式。</summary>
+    public static bool CanCreateModernDialog(bool fileMode = false)
     {
         bool ok = false;
         LastCreateHr = unchecked((int)0x80004005);
@@ -259,7 +312,8 @@ public static class FolderPicker
                     {
                         // 再验证一次：选项必须能被 shell 接受（否则对话框会退化成文件选择）
                         int hrOpt = Vtable<GetOptionsFn>(ppv, SlotGetOptions)(ppv, out uint opts);
-                        opts |= FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_NOCHANGEDIR;
+                        opts |= FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_NOCHANGEDIR;
+                        if (!fileMode) opts |= FOS_PICKFOLDERS;
                         if (hrOpt >= 0)
                             hrOpt = Vtable<SetOptionsFn>(ppv, SlotSetOptions)(ppv, opts);
                         LastSetOptionsHr = hrOpt;

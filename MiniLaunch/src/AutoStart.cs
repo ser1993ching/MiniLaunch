@@ -101,13 +101,21 @@ public static class AutoStart
     public static bool SameExe(string a, string b) =>
         string.Equals(Strip(a), Strip(b), StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>路径是否位于构建输出目录（bin\Debug、bin\Release、obj）——这类路径不适合做自启目标。</summary>
+    /// <summary>
+    /// 路径是否位于构建输出目录（artifacts\bin\MiniLaunch\debug、bin\Debug、obj 等）——
+    /// 这类路径会被 dotnet clean / git clean / 重新发布抹掉，不适合做自启目标。
+    /// 注意：Directory.Build.props 把产物统一收到了仓库内 artifacts\ 下，
+    /// 路径形如 artifacts\bin\MiniLaunch\debug\MiniLaunch.exe（小写 debug，中间多一层项目名），
+    /// 所以既要匹配老的 bin\Debug\，也要匹配新的 \artifacts\ ——只用老模式会漏判，
+    /// 结果是「勾了开机自启 → 指向构建目录 → 重启后不自启，且自愈也不会修」。
+    /// </summary>
     public static bool IsBuildOutput(string path)
     {
-        string p = path.Replace('/', '\\');
-        return p.Contains("\\bin\\Debug\\", StringComparison.OrdinalIgnoreCase)
-            || p.Contains("\\bin\\Release\\", StringComparison.OrdinalIgnoreCase)
-            || p.Contains("\\obj\\", StringComparison.OrdinalIgnoreCase);
+        string p = path.Replace('/', '\\').ToLowerInvariant();
+        return p.Contains("\\artifacts\\")
+            || p.Contains("\\bin\\debug\\")
+            || p.Contains("\\bin\\release\\")
+            || p.Contains("\\obj\\");
     }
 
     // ================= 启动自愈 =================

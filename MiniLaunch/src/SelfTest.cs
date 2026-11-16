@@ -88,6 +88,12 @@ public static class SelfTest
         Check(AutoStart.IsBuildOutput("E:\\p\\MiniLaunch\\bin\\Debug\\net8.0-windows\\MiniLaunch.exe"),
             "自启目标判定：构建目录视为不稳定");        Check(!AutoStart.IsBuildOutput(AutoStart.InstalledExe),
             "自启目标判定：本地安装目录视为稳定", AutoStart.InstalledExe);
+        // 回归：Directory.Build.props 把产物收到仓库内 artifacts\ 下（小写 debug + 多一层项目名），
+        // 只用老的 bin\Debug\ 模式会漏判 → 自启被指向构建目录，重启后不自启且自愈不修。
+        Check(AutoStart.IsBuildOutput(@"E:\code\启动器\artifacts\bin\MiniLaunch\debug\MiniLaunch.exe"),
+            "自启目标判定：artifacts 布局的 debug 产物视为不稳定");
+        Check(!AutoStart.IsBuildOutput(@"C:\Users\x\AppData\Local\MiniLaunch\MiniLaunch.exe"),
+            "自启目标判定：%LOCALAPPDATA% 下的正式版视为稳定");
 
         // 注册表往返：用临时值名，不碰用户真实的 MiniLaunch 项
         const string tmpVal = "MiniLaunch__selftest";
@@ -149,13 +155,37 @@ public static class SelfTest
         };
         ConfigStore.SaveConfig(cfg);
         var cfg2 = ConfigStore.LoadConfig();
-        Check(cfg2.Hotkey == "Alt+Space".Replace("Alt+Space", "Ctrl+Alt+P") && cfg2.AutoStart && cfg2.Custom.Count == 1
+        Check(cfg2.Hotkey == "Ctrl+Alt+P" && cfg2.AutoStart && cfg2.Custom.Count == 1
               && cfg2.Custom[0].Name == "测试程序", "配置保存/加载回环");
         var usage = new UsageDb();
         usage.Recs["x"] = new UsageRec { Count = 3, LastTicks = 123 };
         ConfigStore.SaveUsage(usage);
         var usage2 = ConfigStore.LoadUsage();
         Check(usage2.Recs.Count == 1 && usage2.Recs["x"].Count == 3, "用量库保存/加载回环");
+
+        // ---- 2a2. 用量库并发安全 + 裁剪 + 搬迁 ----
+        // 扫描线程会裁剪、UI 线程会记用量：只能通过 UsageDb 的方法访问 Recs
+        var uPrune = new UsageDb();
+        uPrune.Bump("keep:1");
+        uPrune.Bump("keep:1");
+        uPrune.Bump("dead:1");
+        Check(uPrune.TryGet("keep:1", out var recKeep) && recKeep != null && recKeep.Count == 2,
+            "用量库 Bump 累加正确", $"count={recKeep?.Count}");
+        int removed = uPrune.PruneTo(new HashSet<string> { "keep:1" }, beforeTicks: DateTime.UtcNow.Ticks);
+        Check(removed == 1 && uPrune.Recs.Count == 1 && !uPrune.TryGet("dead:1", out _),
+            "用量库裁剪：不在条目集合里的记录被删除", $"removed={removed}");
+        // 时间滞回：30 天内用过的记录即使当前扫不到也不能删（防一次扫挂就把历史抹干）
+        var uPrune2 = new UsageDb();
+        uPrune2.Bump("gone:1");
+        int removed2 = uPrune2.PruneTo(new HashSet<string>(),
+            beforeTicks: DateTime.UtcNow.Ticks - TimeSpan.FromDays(30).Ticks);
+        Check(removed2 == 0 && uPrune2.TryGet("gone:1", out _),
+            "用量库裁剪：刚用过的记录不会被误删", $"removed={removed2}");
+        Check(uPrune.Move("keep:1", "keep:2") && uPrune.TryGet("keep:2", out var recMoved)
+              && recMoved != null && recMoved.Count == 2 && !uPrune.TryGet("keep:1", out _),
+            "用量库搬迁：重命名后用量不丢");
+        Check(!uPrune.Move("不存在", "x") && !uPrune.Move("keep:2", "keep:2"),
+            "用量库搬迁：不存在的键/同键返回 false");
 
         // ---- 2d. 落盘失败必须吞异常（杀软/索引器短暂锁住 json 时 UI 线程不能崩）----
         try
@@ -181,6 +211,27 @@ public static class SelfTest
         var cfgNull = ConfigStore.LoadConfig();
         Check(cfgNull.Custom != null && cfgNull.Custom.Count == 0, "配置 Custom=null 时自动补空列表");
         Check(Scanners.ScanCustom(cfgNull).Count == 0, "ScanCustom 对空 Custom 列表安全");
+
+        // ---- 2e2. 条目字段为 null 时洗净（否则 c.Path.Equals(...) 在 UI 线程 NRE 崩进程）----
+        File.WriteAllText(Paths.ConfigPath,
+            "{\"Hotkey\":null,\"Custom\":[{\"Name\":null,\"Path\":null,\"Args\":null,\"WorkDir\":null}]," +
+            "\"Websites\":[{\"Name\":null,\"Url\":null}]}");
+        var cfgDirty = ConfigStore.LoadConfig();
+        bool fieldsClean = cfgDirty.Custom.Count == 1 && cfgDirty.Custom[0].Path == ""
+                           && cfgDirty.Custom[0].Name == "" && cfgDirty.Custom[0].Args == ""
+                           && cfgDirty.Websites.Count == 1 && cfgDirty.Websites[0].Url == "";
+        Check(fieldsClean, "配置条目字段为 null 时自动洗净",
+            cfgDirty.Custom.Count > 0 ? $"Path={(cfgDirty.Custom[0].Path == null ? "null" : "\"\"")}" : "无条目");
+        bool noNre = true;
+        try
+        {
+            // 这些就是 UI 线程上会崩的写法（拖放去重 / 删除 / 重命名）
+            _ = cfgDirty.Custom.Any(c => c.Path.Equals("C:\\x", StringComparison.OrdinalIgnoreCase));
+            cfgDirty.Custom.RemoveAll(c => c.Path.Equals("C:\\x", StringComparison.OrdinalIgnoreCase));
+        }
+        catch { noNre = false; }
+        Check(noNre, "洗净后的条目可用于 Path.Equals 系列操作（不 NRE）");
+        Check(cfgDirty.Hotkey == HotkeyParser.DefaultHotkey, "配置 Hotkey=null 时回落到默认热键", cfgDirty.Hotkey);
 
         // ---- 2b. 文件夹快捷入口：配置字段 / 旧配置兼容 / 扫描识别 ----
         string folderDir = Path.Combine(Path.GetTempPath(), "MiniLaunch-folder-" + Guid.NewGuid().ToString("N")[..6]);
@@ -274,6 +325,63 @@ public static class SelfTest
         Check(modernOk,
             "文件夹选择：现代（资源管理器风格）对话框 IFileDialog 可创建",
             $"hr=0x{FolderPicker.LastCreateHr:X8}");
+        // 「添加程序…」也改用同一套 IFileOpenDialog（只是不置 PICKFOLDERS）
+        Check(FolderPicker.CanCreateModernDialog(fileMode: true),
+            "文件夹选择：同一套对话框也支持「选文件」模式", $"hr=0x{FolderPicker.LastSetOptionsHr:X8}");
+
+        // 抽出来的共用绘制工具：两个小窗的按钮布局必须完全一致（否则点击命中会错位）
+        var layA = NameDialog.ButtonLayout(470, 340, 1f);
+        var layB = WebDialog.ButtonLayout(470, 340, 1f);
+        Check(layA.SequenceEqual(layB), "名称窗/网站窗共用同一套按钮布局",
+            $"name=[{string.Join(",", layA)}] web=[{string.Join(",", layB)}]");
+        Check(Theme.Brush(Theme.Surface) == Theme.Brush(Theme.Surface) && Theme.Brush(Theme.Surface) != IntPtr.Zero,
+            "画刷缓存：同色复用同一句柄");
+
+        // 底部标签行（TagRow：网站窗 + 文件夹名称窗共用）：布局与命中必须严格一致
+        var tagItems = new List<(string Name, string Key)>
+        {
+            ("百度", "https://www.baidu.com"),
+            ("GitHub", "https://github.com"),
+        };
+        var tagList = TagRow.Build(tagItems, "https://GITHUB.com", 470, 1f);
+        Check(tagList.Count == 2 && !tagList[0].IsCurrent && tagList[1].IsCurrent,
+            "标签行：当前编辑项高亮（路径/网址比较忽略大小写）",
+            $"cur=[{string.Join(",", tagList.Select(t => t.IsCurrent))}]");
+        int tagHit = TagRow.Hit(tagList, 196, 26, 6, tagList[0].X + 4, 196 + 13);
+        Check(tagHit == TagRow.HitBase, "标签行：点标签命中 HitBase+序号", $"hit={tagHit}");
+        int tagDel = TagRow.Hit(tagList, 196, 26, 6, tagList[1].X + tagList[1].W - 4, 196 + 13);
+        Check(tagDel == TagRow.DelBase + 1, "标签行：点 × 命中 DelBase+序号", $"hit={tagDel}");
+        Check(TagRow.Hit(tagList, 196, 26, 6, 3, 3) == -1, "标签行：空白处不误命中");
+
+        // 名称窗带文件夹标签行时必须够高（允许 4 行），且标签不能压到按钮
+        int nameH = NameDialog.HeightFor(true, 1f);
+        var nbl = NameDialog.ButtonLayout(460, nameH, 1f);
+        Check(nameH == 352 && 140 + (26 + 6) * 4 <= nbl[1] - 8,
+            "名称窗：4 行文件夹标签与按钮不重叠", $"h={nameH} btnY={nbl[1]}");
+        Check(NameDialog.HeightFor(false, 1f) == 214, "名称窗：不带标签行时保持紧凑高度",
+            NameDialog.HeightFor(false, 1f).ToString());
+
+        // 放不下时不能静悄悄丢：Build 的 hidden 要准确，窗口右上角靠它提示「另有 N 个未显示」
+        var manyItems = new List<(string Name, string Key)>();
+        for (int i = 0; i < 6; i++) manyItems.Add((new string('长', 25) + i, "k" + i));   // 每个都占一整行
+        var capped = TagRow.Build(manyItems, "k0", 460, 1f, maxRows: 4, padBase: 22f, out int hiddenCount);
+        Check(capped.Count == 4 && hiddenCount == 2,
+            "标签行：超过最大行数时截断并给出 hidden 计数", $"shown={capped.Count} hidden={hiddenCount}");
+        var uncapped = TagRow.Build(manyItems, "k0", 460, 1f, maxRows: 6, padBase: 22f, out int hiddenNone);
+        Check(uncapped.Count == 6 && hiddenNone == 0, "标签行：行数够时不虚报 hidden",
+            $"shown={uncapped.Count} hidden={hiddenNone}");
+
+        // 输入框几何（两个窗共用）：EDIT 必须严格内缩在框内（否则它的**方角**会把圆角描边切成四个「缺角」），
+        // 且垂直方向居中（单行 EDIT 的文字贴客户区顶部，控件高度和位置得自己算）
+        foreach (float sc in new[] { 1f, 1.25f, 1.5f, 2f })
+        {
+            var (boxRc, editRc) = Theme.SingleLineField(21, 439, 76, (int)Math.Round(32 * sc), sc);
+            bool inside = editRc.L > boxRc.L + 1 && editRc.R < boxRc.R - 1
+                          && editRc.T > boxRc.T + 1 && editRc.B < boxRc.B - 1;
+            int bc = (boxRc.T + boxRc.B) / 2, ec = (editRc.T + editRc.B) / 2;
+            Check(inside && Math.Abs(bc - ec) <= 2 * sc, "输入框几何：EDIT 内缩在框内且垂直居中",
+                $"scale={sc} box={boxRc.Width}x{boxRc.Height} edit={editRc.Width}x{editRc.Height} dy={ec - bc}");
+        }
 
         // ---- 2f. 网站快捷入口：配置 / 网址规范化 / 扫描 / 搜索 / 合并优先级 ----
         var cfgW = new AppConfig
@@ -475,6 +583,11 @@ public static class SelfTest
         Check(r4.Count == 3, "空查询返回全部");
         var r5 = eng.Query("chrome canary", 10);
         Check(r5.Count == 1 && r5[0] == b, "多词 AND 查询");
+        // 全角空格（中文输入法下很容易打出来）也必须当分隔符
+        var r5b = eng.Query("chrome\u3000canary", 10);
+        Check(r5b.Count == 1 && r5b[0] == b, "多词 AND 查询：全角空格分隔");
+        var r5c = eng.Query("chrome\tcanary", 10);
+        Check(r5c.Count == 1 && r5c[0] == b, "多词 AND 查询：Tab 分隔");
 
         // 频率加权
         u.Recs[b.UniqueKey] = new UsageRec { Count = 50, LastTicks = DateTime.UtcNow.Ticks };
@@ -590,11 +703,15 @@ public static class SelfTest
         // ---- 15. 主窗口布局：客户区必须等于 DPI 重算后的尺寸 ----
         // 回归：窗口按 96 DPI 创建后只在 WM_CREATE 重算度量却不 resize，
         // 高 DPI 主屏下底部行/底栏被裁剪（本机 96 DPI 时此断言平凡通过，高 DPI 机器上才有鉴别力）
-        var mw = MainWindow.Create(new AppConfig(), new SearchEngine(new UsageDb()), new IconCache(),
+        using var mwIcons = new IconCache();
+        var mw = MainWindow.Create(new AppConfig(), new SearchEngine(new UsageDb()), mwIcons,
             (e, ra) => { }, () => { }, files => { });
         Win32.GetClientRect(mw.Hwnd, out var mrc);
         Check(mrc.Width == mw.LayoutWidth && mrc.Height == mw.LayoutHeight,
             "主窗口客户区与 DPI 布局一致", $"client={mrc.Width}x{mrc.Height} layout={mw.LayoutWidth}x{mw.LayoutHeight}");
+        // 回归：Alt+F4 / 系统关闭只能隐藏，不能把常驻启动器整个退掉（否则热键+托盘一起消失）
+        Win32.SendMessageW(mw.Hwnd, Win32.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        Check(Win32.IsWindow(mw.Hwnd), "主窗口收到 WM_CLOSE 只隐藏、不销毁");
         Win32.DestroyWindow(mw.Hwnd);
     }
 }

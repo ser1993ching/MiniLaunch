@@ -74,7 +74,7 @@ public static class Scanners
                 string name = Path.GetFileNameWithoutExtension(f).Trim();
                 if (name.Length == 0) continue;
                 string nl = name.ToLowerInvariant();
-                if (nl.StartsWith("卸载") || nl.StartsWith("uninstall") || nl.StartsWith("帮助") ||
+                if (nl.StartsWith("卸载") || nl.StartsWith("uninstall") ||
                     nl.Contains("readme") || nl.Contains("帮助")) continue;
                 if (ext == ".lnk")
                 {
@@ -92,10 +92,32 @@ public static class Scanners
         return list;
     }
 
-    static void CollectFiles(string dir, List<string> sink)
+    /// <summary>开始菜单扫描的最大递归深度（已远超真实目录结构）。</summary>
+    const int MaxScanDepth = 8;
+
+    static void CollectFiles(string dir, List<string> sink) => CollectFiles(dir, sink, 0);
+
+    static void CollectFiles(string dir, List<string> sink, int depth)
     {
         try { foreach (var f in Directory.EnumerateFiles(dir)) sink.Add(f); } catch { }
-        try { foreach (var d in Directory.EnumerateDirectories(dir)) CollectFiles(d, sink); } catch { }
+        // 双重保险：
+        // ① 跳过重解析点（junction / 符号链接）——指回自身就是无限递归；
+        // ② 深度上限——即便属性判定失败也不会无限往下跑。
+        // 为什么要挡：StackOverflowException 在 .NET 里**无法捕获**，递归爆了就整个进程没了。
+        if (depth >= MaxScanDepth) return;
+        try
+        {
+            foreach (var d in Directory.EnumerateDirectories(dir))
+            {
+                try
+                {
+                    if ((new DirectoryInfo(d).Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                }
+                catch { continue; }
+                CollectFiles(d, sink, depth + 1);
+            }
+        }
+        catch { }
     }
 
     static string? ReadUrlLine(string file, string prefix)
@@ -372,8 +394,8 @@ public static class Scanners
         e.NameLower = name.ToLowerInvariant();
         // 拼音检索串：手工别名 + GB2312 全字集（6763 字）的全拼/首字母/中段后缀
         string alias = Pinyin.Expand(name);
-        string fileLower = SafeLowerFileName(launchPath);
-        string dirLower = SafeLowerDir(launchPath);
+        string fileLower = SafeLower(launchPath, nameOnly: true);
+        string dirLower = SafeLower(launchPath, nameOnly: false);
         // 网站条目：检索串里放完整网址（域名/路径都能搜到），不放文件名
         string extra = isWeb ? " " + launchPath.ToLowerInvariant() : "";
         // 文件夹条目的检索串里已含目录自身的名字（fileLower = 目录名），别名不同也能搜到
@@ -384,15 +406,10 @@ public static class Scanners
         return e;
     }
 
-    static string SafeLowerFileName(string p)
+    /// <summary>取小写文件名或目录名（非法路径/空值时返回空串，不让扫描线程崩）。</summary>
+    static string SafeLower(string p, bool nameOnly)
     {
-        try { return Path.GetFileName(p).ToLowerInvariant(); }
-        catch { return ""; }
-    }
-
-    static string SafeLowerDir(string p)
-    {
-        try { return Path.GetDirectoryName(p)?.ToLowerInvariant() ?? ""; }
+        try { return (nameOnly ? Path.GetFileName(p) : Path.GetDirectoryName(p))?.ToLowerInvariant() ?? ""; }
         catch { return ""; }
     }
 }
