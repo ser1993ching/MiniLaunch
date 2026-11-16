@@ -77,6 +77,9 @@ public sealed class NameDialog
         }
 
         Win32.ShowWindow(hwnd, Win32.SW_SHOW);
+        // 置顶：本程序的主窗口也是 TOPMOST，不显式抬一次会被主窗口盖住（点不到）
+        Win32.SetWindowPos(hwnd, Win32.HWND_TOPMOST, 0, 0, 0, 0,
+            Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_SHOWWINDOW);
         Win32.SetForegroundWindow(hwnd);
         Win32.SetWindowTextW(self._edit, initial ?? "");
         Win32.SetFocus(self._edit);

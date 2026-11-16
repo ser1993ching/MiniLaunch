@@ -106,6 +106,29 @@ internal static class Theme
         Win32.DeleteObject(pen);
     }
 
+    /// <summary>地球图标（网站条目用）：填充圆 + 一条经线椭圆 + 赤道线。</summary>
+    public static void DrawGlobe(IntPtr hdc, int x, int y, int size)
+    {
+        if (size <= 6) return;
+        int d = size;
+        IntPtr pen = Win32.CreatePen(Win32.PS_SOLID, Math.Max(1, size / 14), Accent);
+        IntPtr brush = Win32.CreateSolidBrush(Win32.Rgb(0x27, 0x35, 0x5C));
+        IntPtr oldPen = Win32.SelectObject(hdc, pen);
+        IntPtr oldBrush = Win32.SelectObject(hdc, brush);
+        // 圆盘（填充 + 外圈）
+        Win32.Ellipse(hdc, x, y, x + d, y + d);
+        // 经线与赤道：换成 NULL_BRUSH 只画线
+        IntPtr oldNull = Win32.SelectObject(hdc, Win32.GetStockObject(Win32.NULL_BRUSH));
+        Win32.Ellipse(hdc, x + d * 28 / 100, y, x + d * 72 / 100, y + d);
+        Win32.MoveToEx(hdc, x, y + d / 2, IntPtr.Zero);
+        Win32.LineTo(hdc, x + d, y + d / 2);
+        Win32.SelectObject(hdc, oldNull);
+        Win32.SelectObject(hdc, oldBrush);
+        Win32.SelectObject(hdc, oldPen);
+        Win32.DeleteObject(brush);
+        Win32.DeleteObject(pen);
+    }
+
     // ===== 文本 =====
 
     public const uint AlignLeft = Win32.DT_SINGLELINE | Win32.DT_LEFT | Win32.DT_VCENTER | Win32.DT_END_ELLIPSIS | Win32.DT_NOPREFIX;

@@ -545,22 +545,34 @@ public sealed class MainWindow
     {
         var e = _results[idx];
         var m = Win32.CreatePopupMenu();
-        Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)1, e.IsFolder ? "打开文件夹" : "打开");
-        // 文件夹没有「管理员运行」这回事，置灰避免误解
-        if (e.IsFolder)
-            Win32.AppendMenuW(m, Win32.MF_STRING | Win32.MF_GRAYED, (UIntPtr)2, "以管理员身份运行");
-        else
-            Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)2, "以管理员身份运行");
-        bool canReveal = e.IsFolder
-            ? ParentDir(e.LaunchPath) != null
-            : (e.RevealPath.Length > 0 && (File.Exists(e.RevealPath) || Directory.Exists(e.RevealPath)));
-        Win32.AppendMenuW(m, Win32.MF_STRING | (canReveal ? 0u : Win32.MF_GRAYED), (UIntPtr)3, "打开所在位置");
-        Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)4, "复制路径");
-        if (e.Source == EntrySource.Custom)
+        if (e.IsWeb)
         {
+            // 网站条目：没有「管理员运行」「所在位置」这些概念
+            Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)1, "打开网页");
+            Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)4, "复制网址");
             Win32.AppendMenuW(m, Win32.MF_SEPARATOR, UIntPtr.Zero, null);
-            Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)6, "重命名…");
-            Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)5, "从启动器删除");
+            Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)6, "编辑网站…");
+            Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)5, "删除网站");
+        }
+        else
+        {
+            Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)1, e.IsFolder ? "打开文件夹" : "打开");
+            // 文件夹没有「管理员运行」这回事，置灰避免误解
+            if (e.IsFolder)
+                Win32.AppendMenuW(m, Win32.MF_STRING | Win32.MF_GRAYED, (UIntPtr)2, "以管理员身份运行");
+            else
+                Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)2, "以管理员身份运行");
+            bool canReveal = e.IsFolder
+                ? ParentDir(e.LaunchPath) != null
+                : (e.RevealPath.Length > 0 && (File.Exists(e.RevealPath) || Directory.Exists(e.RevealPath)));
+            Win32.AppendMenuW(m, Win32.MF_STRING | (canReveal ? 0u : Win32.MF_GRAYED), (UIntPtr)3, "打开所在位置");
+            Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)4, "复制路径");
+            if (e.Source == EntrySource.Custom)
+            {
+                Win32.AppendMenuW(m, Win32.MF_SEPARATOR, UIntPtr.Zero, null);
+                Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)6, "重命名…");
+                Win32.AppendMenuW(m, Win32.MF_STRING, (UIntPtr)5, "从启动器删除");
+            }
         }
         Win32.SetForegroundWindow(Hwnd);
         int cmd = Win32.TrackPopupMenu(m, Win32.TPM_RETURNCMD | Win32.TPM_RIGHTBUTTON | Win32.TPM_NONOTIFY,
@@ -580,8 +592,14 @@ public sealed class MainWindow
                 else Launcher.Reveal(e.RevealPath);
                 break;
             case 4: Launcher.SetClipboardText(Hwnd, e.DisplayPath); break;
-            case 5: RemoveCustom(e); break;
-            case 6: Program.RenameCustom(e); break;
+            case 5:
+                if (e.IsWeb) Program.RemoveWebSite(e.LaunchPath);
+                else RemoveCustom(e);
+                break;
+            case 6:
+                if (e.IsWeb) Program.EditWebSite(e);
+                else Program.RenameCustom(e);
+                break;
         }
     }
 
@@ -705,7 +723,12 @@ public sealed class MainWindow
             // 图标：命中缓存直接画；未命中则排到后台线程提取（避免 WM_PAINT 里同步取图标卡住 UI）
             int iconX = row.L + Scale(12);
             int iconY = y + (_rowH - _icon) / 2;
-            if (_icons.TryGet(e, out IntPtr hIcon))
+            if (e.IsWeb)
+            {
+                // 网站条目没有本地文件，图标画一个地球
+                Theme.DrawGlobe(hdc, iconX, iconY, _icon);
+            }
+            else if (_icons.TryGet(e, out IntPtr hIcon))
             {
                 if (hIcon != IntPtr.Zero)
                     Win32.DrawIconEx(hdc, iconX, iconY, hIcon, _icon, _icon, 0, IntPtr.Zero, Win32.DI_NORMAL);
@@ -718,13 +741,13 @@ public sealed class MainWindow
             int textX = iconX + _icon + Scale(12);
             int textR = row.R - Scale(10);
 
-            // 右侧标记（管理员 / 文件夹），先算宽度再决定标题可用宽度
-            if (e.RunAs || e.IsFolder)
+            // 右侧标记（管理员 / 文件夹 / 网站），先算宽度再决定标题可用宽度
+            if (e.RunAs || e.IsFolder || e.IsWeb)
             {
                 Win32.SelectObject(hdc, _fontSmall);
-                Win32.SetTextColor(hdc, (int)(selected ? Theme.TextOnSelSub : (e.IsFolder ? Theme.TextDim : Theme.Warn)));
+                Win32.SetTextColor(hdc, (int)(selected ? Theme.TextOnSelSub : (e.IsFolder || e.IsWeb ? Theme.TextDim : Theme.Warn)));
                 var rTag = new Win32.RECT { L = textR - Scale(52), T = y, R = textR, B = y + _rowH };
-                Win32.DrawTextW(hdc, e.IsFolder ? "文件夹" : "管理员", -1, ref rTag, Theme.AlignRight);
+                Win32.DrawTextW(hdc, e.IsFolder ? "文件夹" : (e.IsWeb ? "网站" : "管理员"), -1, ref rTag, Theme.AlignRight);
                 textR -= Scale(58);
             }
 

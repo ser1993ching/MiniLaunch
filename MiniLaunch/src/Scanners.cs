@@ -32,6 +32,27 @@ public static class Scanners
         return list;
     }
 
+    // ============ 网站快捷入口 ============
+    /// <summary>
+    /// 扫描用户自定义的网站（config.json 的 Websites 字段）。
+    /// 网址在这里统一规范化（补协议头），无效的地址直接丢弃。
+    /// </summary>
+    public static List<Entry> ScanWebsites(AppConfig cfg)
+    {
+        var list = new List<Entry>();
+        var items = cfg.Websites?.ToArray() ?? Array.Empty<WebSiteEntry>();
+        foreach (var w in items)
+        {
+            string url = WebUrl.Normalize(w.Url);
+            if (!WebUrl.IsValid(url)) continue;
+            string name = string.IsNullOrWhiteSpace(w.Name) ? WebUrl.DefaultName(url) : w.Name.Trim();
+            if (name.Length == 0) continue;
+            list.Add(Make(name, url, "", EntrySource.Web,
+                iconRef: "", keywords: w.Keywords ?? "", isWeb: true));
+        }
+        return list;
+    }
+
     // ============ 开始菜单快捷方式 ============
     public static List<Entry> ScanStartMenu()
     {
@@ -333,7 +354,7 @@ public static class Scanners
     // ============ 条目构建 ============
     public static Entry Make(string name, string launchPath, string args, EntrySource src,
         string iconRef, string keywords = "", string workDir = "", int iconIndex = 0, bool runAs = false,
-        bool isFolder = false)
+        bool isFolder = false, bool isWeb = false)
     {
         var e = new Entry
         {
@@ -346,16 +367,20 @@ public static class Scanners
             IconIndex = iconIndex,
             Source = src,
             IsFolder = isFolder,
+            IsWeb = isWeb,
         };
         e.NameLower = name.ToLowerInvariant();
         // 拼音检索串：手工别名 + GB2312 全字集（6763 字）的全拼/首字母/中段后缀
         string alias = Pinyin.Expand(name);
         string fileLower = SafeLowerFileName(launchPath);
         string dirLower = SafeLowerDir(launchPath);
+        // 网站条目：检索串里放完整网址（域名/路径都能搜到），不放文件名
+        string extra = isWeb ? " " + launchPath.ToLowerInvariant() : "";
         // 文件夹条目的检索串里已含目录自身的名字（fileLower = 目录名），别名不同也能搜到
-        e.HayLower = (e.NameLower + " " + alias + " " + (keywords ?? "").ToLowerInvariant() + " " + fileLower + " " + dirLower).Trim();
+        e.HayLower = (e.NameLower + " " + alias + " " + (keywords ?? "").ToLowerInvariant() + " " + fileLower + " " + dirLower + extra).Trim();
         e.UniqueKey = src + ":" + e.NameLower;
-        e.RevealPath = src == EntrySource.Uwp ? "" : launchPath;
+        // 网站没有「所在位置」可言；UWP 也没有
+        e.RevealPath = (src == EntrySource.Uwp || isWeb) ? "" : launchPath;
         return e;
     }
 

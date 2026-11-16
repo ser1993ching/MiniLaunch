@@ -100,6 +100,7 @@ The table below shows **measured numbers** (Windows 10/11, Release self-containe
 | **图标缓存** | Icon cache | 图标在**后台线程**提取，UI 绘制只读缓存；LRU 保留 64 项 HICON，驱逐时销毁 |
 | **拖放添加** | Drag & drop | 把 exe / 快捷方式拖进窗口，立即添加为自定义条目并持久化 |
 | **文件夹快速启动** | Folder shortcuts | 托盘菜单「添加文件夹…」选目录并起名，回车直接进目录；常用文件夹在空查询时置顶 |
+| **网站快速访问** | Website shortcuts | 托盘菜单「添加网站…」自定义常用网址（百度 / 淘宝 / GitHub…），回车用默认浏览器打开；支持名称、网址、关键词，支持拼音搜索与右键编辑/删除 |
 | **使用频率排序** | Usage-based ranking | 最近 24 小时用过的条目额外加权，常用程序自然浮到前面 |
 | **托盘菜单** | Tray menu | 设置热键 / 添加程序 / 重新扫描 / 开机自启 / 退出 |
 | **开机自启** | Auto-start | 可选开机常驻；启动时分两阶段扫描，开机不占启动资源 |
@@ -169,6 +170,18 @@ Opened from the tray menu; the new combo applies immediately, `Esc` cancels.
   <img src="docs/screenshots/hotkey-dialog.png" width="360" alt="Hotkey dialog" />
 </p>
 
+### 5. 网站快速访问 · Website shortcuts
+
+上：搜索 `baidu` 命中自建网站条目（地球图标 + 「网站」标记），回车用默认浏览器打开。
+下：托盘菜单「添加网站…」的编辑窗，顶部是「百度 / 淘宝 / GitHub / 知乎 / 哔哩哔哩」快捷标签，一点即填。
+Top: searching `baidu` hits your own website entry (globe icon + "网站" tag); `Enter` opens it in the default browser.
+Bottom: the *Add website…* dialog with one-click presets for Baidu / Taobao / GitHub / Zhihu / Bilibili.
+
+<p align="center">
+  <img src="docs/screenshots/main-web.png" width="520" alt="Website entry in the result list" />
+  <img src="docs/screenshots/web-dialog.png" width="380" alt="Website dialog" />
+</p>
+
 ---
 
 ## 📥 下载 / Download
@@ -216,11 +229,11 @@ dotnet build
 ./artifacts/bin/MiniLaunch/debug/MiniLaunch.exe --selftest
 ```
 
-必须**全绿**（当前基线 **82 项通过**），退出码为 `0`。每次改动后请务必执行。
-Must be **all green** (current baseline: **82 assertions passed**) with exit code `0`. Run it after every change.
+必须**全绿**（当前基线 **126 项通过**），退出码为 `0`。每次改动后请务必执行。
+Must be **all green** (current baseline: **126 assertions passed**) with exit code `0`. Run it after every change.
 
 ```
-===== 自检结果: 通过 82 / 失败 0，耗时 1441ms =====
+===== 自检结果: 通过 126 / 失败 0，耗时 1441ms =====
 当前进程工作集: 1.3 MB
 ```
 
@@ -239,7 +252,7 @@ cp artifacts/publish/MiniLaunch/release_win-x64/MiniLaunch.exe \
    "/e/code/启动器/publish/win-x64/"
 ```
 
-发布后核对：运行 `./MiniLaunch.exe --selftest`，应显示 **82 项通过**（拿到旧产物会显示 70/60/45/38）。
+发布后核对：运行 `./MiniLaunch.exe --selftest`，应显示 **126 项通过**（拿到旧产物会显示 70/60/45/38）。
 
 > 发布**不带** `PublishReadyToRun` —— SDK 的单文件打包器会重建宿主 exe 并丢弃图标资源（PE 里只剩 RCDATA/VERSION/MANIFEST）。
 > Do **not** enable `PublishReadyToRun` — the single-file bundler rebuilds the host executable and drops the embedded icon resource.
@@ -268,9 +281,10 @@ cp artifacts/publish/MiniLaunch/release_win-x64/MiniLaunch.exe \
 MiniLaunch/src/
   Program.cs       入口：单实例 Mutex、命名 Event、热键、托盘、消息循环、两阶段扫描
   Win32.cs         全部 P/Invoke / 结构体 / 常量（新增 API 只加在这里）
-  Config.cs        AppConfig / CustomEntry / UsageDb / JsonCtx 源生成 / 原子写配置
-  Entry.cs         条目模型与合并去重（Custom > StartMenu > Registry > Uwp）
-  Scanners.cs      开始菜单 / 注册表 / UWP 三路扫描器
+  Config.cs        AppConfig / CustomEntry / WebSiteEntry / UsageDb / JsonCtx 源生成 / 原子写配置
+  Entry.cs         条目模型与合并去重（Custom > Web > StartMenu > Registry > Uwp）
+  Scanners.cs      自定义 / 网站 / 开始菜单 / 注册表 / UWP 扫描器
+  WebUrl.cs        网址规范化与校验（补协议头、取域名）+ 网站条目增删改（WebSites）
   Pinyin.cs        拼音搜索：手工别名表 + GB2312 全字集（6763 字）全拼/首字母/中段（表见 PinyinTable.g.cs，由 tools/make_pinyin.py 生成）
   Search.cs        分词 AND 匹配与打分排序
   IconCache.cs     HICON 提取与 LRU 缓存
@@ -280,6 +294,7 @@ MiniLaunch/src/
   Theme.cs         配色表与 GDI 绘制工具
   MainWindow.cs    主窗口（无边框自绘 + 原生 EDIT 子类化 + 拖放 + 右键菜单）
   HotkeyDialog.cs  热键录制小窗
+  WebDialog.cs     网站编辑小窗（名称 / 网址 / 关键词 + 常用站点快捷标签）
   Tray.cs          托盘菜单
   NativeOut.cs     管道 stdout 输出（WinExe 无控制台）
   SelfTest.cs      --selftest 全部断言
@@ -291,7 +306,7 @@ MiniLaunch/src/
 
 | 文件 | 用途 |
 | --- | --- |
-| `config.json` | 热键、开机自启、自定义条目 |
+| `config.json` | 热键、开机自启、自定义条目、**网站快捷入口（Websites）** |
 | `usage.json` | 各条目的使用次数与最后使用时间 |
 | `uwp-cache.json` | UWP 条目缓存 + 扫描时间戳哨兵（7 天有效期） |
 
@@ -304,6 +319,9 @@ A：它常被中文输入法占用。注册失败时程序会弹气泡提示但*
 
 **Q：怎么把不在列表里的程序加进来？**
 A：直接把 exe 或快捷方式**拖进窗口**，或者用托盘菜单「添加程序…」。自定义条目的优先级最高。
+
+**Q：常用网站怎么加？**
+A：托盘菜单「添加网站…」，填名称与网址（只填 `www.baidu.com` 也会自动补 `https://`），或点顶部的「百度 / 淘宝 / GitHub」快捷标签一键填好。保存后在搜索框输入 `baidu`、`bd` 或关键词都能搜到，回车用默认浏览器打开；右键条目可「编辑网站…」或「删除网站」。
 
 **Q：UWP 应用为什么有时候搜不到？**
 A：UWP 列表来自 `Get-StartApps`（powershell），有 7 天磁盘缓存。开机自启常驻时该扫描会推迟到窗口首次显示之后执行，属于正常行为。
@@ -377,6 +395,7 @@ Press `Ctrl+Space`, type a few characters, hit `Enter`. Everything else is delib
 | --- | --- |
 | **Main window** — the full list after invoking<br><img src="docs/screenshots/main-empty.png" width="420" alt="Main window" /> | **Search** — filter as you type<br><img src="docs/screenshots/main-search.png" width="420" alt="Search" /> |
 | **Pinyin alias** — `wx` finds 「微信」<br><img src="docs/screenshots/main-pinyin.png" width="420" alt="Pinyin search" /> | **Hotkey recorder** — applies instantly<br><img src="docs/screenshots/hotkey-dialog.png" width="300" alt="Hotkey dialog" /> |
+| **Website entry** — your own URL in the list<br><img src="docs/screenshots/main-web.png" width="420" alt="Website entry" /> | **Website dialog** — add / edit a URL<br><img src="docs/screenshots/web-dialog.png" width="300" alt="Website dialog" /> |
 
 ## Features
 
@@ -389,6 +408,7 @@ Press `Ctrl+Space`, type a few characters, hit `Enter`. Everything else is delib
 | Icon cache | Icons are extracted on a **background thread**; the UI only reads the cache. LRU of 64 HICONs, destroyed on eviction |
 | Drag & drop | Drop an `.exe` or a shortcut onto the window to add a custom entry |
 | Folder shortcuts | Tray menu → *Add folder…* picks a directory and names it; Enter opens it directly, and pinned folders stay on top of an empty query |
+| Website shortcuts | Tray menu → *Add website…* stores your own shortcuts (Baidu / Taobao / GitHub…); Enter opens them in the default browser, and they are searchable by name, pinyin or keyword, with right-click edit/delete |
 | Usage ranking | Apps used in the last 24 hours get an extra boost and float to the top |
 | Tray menu | Set hotkey / Add app / Rescan / Start with Windows / Quit |
 | Fully local | Config and usage stats live in `%APPDATA%\MiniLaunch\`; nothing ever leaves your machine |
@@ -413,7 +433,7 @@ Press `Ctrl+Space`, type a few characters, hit `Enter`. Everything else is delib
 # build (Debug / JIT is enough for day-to-day work)
 cd MiniLaunch && dotnet build
 
-# headless self-test — must be all green (baseline: 82 assertions), exit code 0
+# headless self-test — must be all green (baseline: 126 assertions), exit code 0
 ./artifacts/bin/MiniLaunch/debug/MiniLaunch.exe --selftest
 
 # publish a self-contained, trimmed single file (output: artifacts/publish/MiniLaunch/release_win-x64/)

@@ -275,6 +275,85 @@ public static class SelfTest
             "文件夹选择：现代（资源管理器风格）对话框 IFileDialog 可创建",
             $"hr=0x{FolderPicker.LastCreateHr:X8}");
 
+        // ---- 2f. 网站快捷入口：配置 / 网址规范化 / 扫描 / 搜索 / 合并优先级 ----
+        var cfgW = new AppConfig
+        {
+            Websites =
+            {
+                new WebSiteEntry { Name = "百度", Url = "www.baidu.com", Keywords = "搜索" },
+                new WebSiteEntry { Name = "GitHub", Url = "https://github.com/", Keywords = "代码 git" },
+                new WebSiteEntry { Name = "无效站点", Url = "not a url" },
+            },
+        };
+        ConfigStore.SaveConfig(cfgW);
+        var cfgW2 = ConfigStore.LoadConfig();
+        Check(cfgW2.Websites.Count == 3, "网站配置保存/加载回环", $"count={cfgW2.Websites.Count}");
+
+        var webEntries = Scanners.ScanWebsites(cfgW2);
+        Check(webEntries.Count == 2, "网站扫描：无效网址被丢弃", $"count={webEntries.Count}");
+        var bd = webEntries.FirstOrDefault(e => e.Name == "百度");
+        Check(bd != null && bd.IsWeb && bd.LaunchPath == "https://www.baidu.com",
+            "网站网址自动补全 https 协议", bd?.LaunchPath ?? "null");
+        Check(bd != null && bd.RevealPath.Length == 0, "网站条目没有「打开所在位置」目标");
+        Check(bd != null && bd.HayLower.Contains("baidu.com"), "网站检索串包含域名", bd?.HayLower ?? "");
+
+        Check(WebUrl.IsValid("https://www.baidu.com") && WebUrl.IsValid("www.baidu.com")
+              && !WebUrl.IsValid("not a url") && !WebUrl.IsValid(""), "网址校验");
+        Check(WebUrl.HostOf("https://www.baidu.com/s?wd=x") == "www.baidu.com",
+            "网址取域名", WebUrl.HostOf("https://www.baidu.com/s?wd=x"));
+        Check(WebUrl.DefaultName("https://www.taobao.com") == "taobao.com",
+            "默认名称取域名（去 www.）", WebUrl.DefaultName("https://www.taobao.com"));
+        Check(WebUrl.Presets.Any(p => p.Url.Contains("baidu.com")), "常用站点预设含百度");
+
+        // 搜索：名称 / 拼音 / 域名 / 关键词 都能命中
+        var engW = new SearchEngine(new UsageDb());
+        engW.SetEntries(webEntries);
+        Check(engW.Query("baidu", 5).Count == 1, "按域名搜索网站条目");
+        Check(engW.Query("bd", 5) is { Count: 1 } qw && qw[0].Name == "百度", "拼音首字母搜索网站条目");
+        Check(engW.Query("搜索", 5).Count == 1, "按关键词搜索网站条目");
+
+        // 合并优先级：网站条目压过同名的开始菜单条目
+        var eWebSame = Scanners.Make("百度", "https://www.baidu.com", "", EntrySource.Web, "", isWeb: true);
+        var eAppSame = Scanners.Make("百度", @"C:\x\baidu.exe", "", EntrySource.StartMenu, @"C:\x\baidu.exe");
+        var mergedW = EntryMerger.Merge(new(), new List<Entry> { eAppSame }, new(), new(), new List<Entry> { eWebSame });
+        Check(mergedW.Count == 1 && mergedW[0].IsWeb, "同名时网站条目优先于开始菜单条目");
+
+        // 用户手改 config.json 写成 "Websites": null 时不能 NRE
+        File.WriteAllText(Paths.ConfigPath, "{\"Hotkey\":\"Ctrl+Space\",\"Websites\":null}");
+        var cfgNullW = ConfigStore.LoadConfig();
+        Check(cfgNullW.Websites != null && cfgNullW.Websites.Count == 0, "配置 Websites=null 时自动补空列表");
+        Check(Scanners.ScanWebsites(cfgNullW).Count == 0, "ScanWebsites 对空 Websites 列表安全");
+
+        // 网站编辑窗：按钮与预设标签的命中区
+        var wbl = WebDialog.ButtonLayout(470, 340, 1f);
+        Check(wbl[0] >= 0 && wbl[4] + wbl[6] <= 470 && wbl[5] + wbl[7] <= 340,
+            "网站编辑窗：按钮布局在窗口内（取消在左、确定在右）",
+            $"cancel=({wbl[0]},{wbl[1]}) ok=({wbl[4]},{wbl[5]})");
+        Check(WebDialog.HitButton(470, 340, 1f, wbl[4] + wbl[6] / 2, wbl[5] + wbl[7] / 2) == WebDialog.BtnOk,
+            "网站编辑窗：点击「确定」按钮命中");
+        int chipW = WebDialog.ChipWidth(WebUrl.Presets[0].Name, 1f);
+        Check(WebDialog.HitPreset(470, 1f, 22 + chipW / 2, WebDialog.PresetTop(1f) + 10) == 0,
+            "网站编辑窗：常用站点标签命中");
+        Check(WebDialog.HitPreset(470, 1f, 5, 5) == -1, "网站编辑窗：空白处不误命中标签");
+
+        // 网站条目的增删改（与 UI 解耦，直接验证）
+        var wsList = new List<WebSiteEntry>();
+        Check(WebSites.Upsert(wsList, "百度", "www.baidu.com", "搜索"), "新增网站条目");
+        Check(wsList.Count == 1 && wsList[0].Url == "https://www.baidu.com" && wsList[0].Name == "百度",
+            "新增网站条目：网址自动补协议头", wsList.Count > 0 ? wsList[0].Url : "");
+        Check(WebSites.Upsert(wsList, "百度一下", "www.baidu.com", "搜索2"), "同一网址重复添加不新增条目");
+        Check(wsList.Count == 1 && wsList[0].Name == "百度一下" && wsList[0].Keywords == "搜索2",
+            "同一网址重复添加时覆盖名称与关键词");
+        Check(WebSites.Upsert(wsList, "淘宝", "https://www.taobao.com", ""), "新增第二个网站条目");
+        Check(!WebSites.Upsert(wsList, "旧名", "not a url", ""), "无效网址拒绝写入");
+        Check(wsList.Count == 2, "无效网址不改变条目数", $"count={wsList.Count}");
+        Check(WebSites.Upsert(wsList, "淘宝商城", "https://www.taobao.com/x", "购物",
+                "https://www.taobao.com"), "编辑网站条目（允许改网址）");
+        Check(wsList.Count == 2 && wsList.Any(w => w.Url == "https://www.taobao.com/x" && w.Name == "淘宝商城"),
+            "编辑网站条目生效");
+        Check(WebSites.Remove(wsList, "https://www.baidu.com") && wsList.Count == 1, "按网址删除网站条目");
+        Check(!WebSites.Remove(wsList, "https://www.baidu.com"), "删除不存在的网址返回 false");
+
         // ---- 3. 拼音：手工别名 + GB2312 全字集通用拼音表 ----
         Check(Pinyin.Expand("微信").Contains("wx"), "拼音别名 微信→wx");
         Check(Pinyin.Expand("企业微信").Contains("qywx"), "拼音别名 企业微信→qywx");

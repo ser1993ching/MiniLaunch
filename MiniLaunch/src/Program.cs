@@ -119,6 +119,12 @@ public static class Program
             _win.PreviewMode = true;
             NameDialog.Show("添加文件夹", @"D:\项目\MiniLaunch", "MiniLaunch", _ => true);
         }
+        // 网站编辑窗预览（调试/截图用）
+        if (args.Contains("--web-dialog"))
+        {
+            _win.PreviewMode = true;
+            WebDialog.Show("添加网站", "百度", "https://www.baidu.com", "搜索", (n, u, k) => true);
+        }
         // 文件夹选择对话框预览（调试用）：选完直接进名称输入窗
         if (args.Contains("--pick-folder"))
         {
@@ -202,24 +208,26 @@ public static class Program
 
     static void DoScan()
     {
-        // 第一阶段（快，约 30ms）：自定义 + 开始菜单 + 注册表 → 先发布，窗口不必等 UWP
+        // 第一阶段（快，约 30ms）：自定义 + 网站 + 开始菜单 + 注册表 → 先发布，窗口不必等 UWP
         var custom = Scanners.ScanCustom(_cfg);
+        var web = Scanners.ScanWebsites(_cfg);
         var sm = Scanners.ScanStartMenu();
         var reg = Scanners.ScanRegistry();
-        PublishEntries(custom, sm, reg, new List<Entry>());
+        PublishEntries(custom, sm, reg, new List<Entry>(), web);
 
         // 第二阶段（慢，首次要 1.3s 拉 powershell）：等「窗口首次显示」或 3 秒超时（先到者触发）。
         // 开机自启常驻时窗口可能永远不显示——此前用 FirstShown.Wait() 无限阻塞，
         // 结果是 UWP 应用永远扫不到、永远搜不出来。现在最多等 3 秒就照常扫。
         try { FirstShown.Wait(TimeSpan.FromSeconds(3)); } catch { }
         var uwp = Scanners.ScanUwp(false);
-        PublishEntries(custom, sm, reg, uwp);
+        PublishEntries(custom, sm, reg, uwp, web);
         UwpScanned = true;
     }
 
-    static void PublishEntries(List<Entry> custom, List<Entry> sm, List<Entry> reg, List<Entry> uwp)
+    static void PublishEntries(List<Entry> custom, List<Entry> sm, List<Entry> reg, List<Entry> uwp,
+        List<Entry>? web = null)
     {
-        var merged = EntryMerger.Merge(custom, sm, reg, uwp);
+        var merged = EntryMerger.Merge(custom, sm, reg, uwp, web);
         _search.SetEntries(merged);
         if (_win != null)
             Win32.PostMessageW(_win.Hwnd, Win32.WM_APP_SCAN_DONE, IntPtr.Zero, IntPtr.Zero);
@@ -324,6 +332,49 @@ public static class Program
             }
             return false;
         });
+    }
+
+    // ================= 网站快捷入口 =================
+    /// <summary>托盘菜单「添加网站…」：弹出编辑窗，确认后写入 config.json。</summary>
+    public static void PickAndAddWebSite(IntPtr owner)
+    {
+        if (WebDialog.IsOpen) return;
+        WebDialog.Show("添加网站", "", "", "", (name, url, kw) => AddWebSite(name, url, kw, ""));
+    }
+
+    /// <summary>新增（或更新）一个网站快捷入口。oldUrl 非空时表示「编辑」该条目。</summary>
+    public static bool AddWebSite(string name, string url, string keywords, string oldUrl = "")
+    {
+        _cfg.Websites ??= new List<WebSiteEntry>();
+        if (!WebSites.Upsert(_cfg.Websites, name, url, keywords, oldUrl)) return false;
+        ConfigStore.SaveConfig(_cfg);
+        StartScan(true);
+        return true;
+    }
+
+    /// <summary>编辑已有的网站快捷入口（右键菜单「编辑网站…」）。</summary>
+    public static void EditWebSite(Entry e)
+    {
+        if (!e.IsWeb) return;
+        string url = e.LaunchPath;
+        string name = e.Name;
+        string kw = "";
+        foreach (var w in _cfg.Websites)
+        {
+            if (!WebUrl.Normalize(w.Url).Equals(WebUrl.Normalize(url), StringComparison.OrdinalIgnoreCase)) continue;
+            kw = w.Keywords ?? "";
+            break;
+        }
+        WebDialog.Show("编辑网站", name, url, kw, (n, u, k) => AddWebSite(n, u, k, url));
+    }
+
+    /// <summary>删除一个网站快捷入口（右键菜单「删除网站」）。</summary>
+    public static void RemoveWebSite(string url)
+    {
+        _cfg.Websites ??= new List<WebSiteEntry>();
+        WebSites.Remove(_cfg.Websites, url);
+        ConfigStore.SaveConfig(_cfg);
+        StartScan(true);
     }
 
     public static void PickAndAddFile(IntPtr owner)

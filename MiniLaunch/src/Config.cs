@@ -18,12 +18,28 @@ public class CustomEntry
     public bool IsFolder { get; set; }
 }
 
+/// <summary>
+/// 「网站快捷入口」：用户自定义的一组常用网址，回车用默认浏览器打开。
+/// 存在 config.json 的 Websites 字段里（与 Custom 条目并列，互不影响）。
+/// </summary>
+public class WebSiteEntry
+{
+    /// <summary>显示名（留空时自动取网址的域名）。</summary>
+    public string Name { get; set; } = "";
+    /// <summary>网址（保存前会用 WebUrl.Normalize 补全协议头）。</summary>
+    public string Url { get; set; } = "";
+    /// <summary>别名关键词，用于搜索（如「购物」「代码托管」）。</summary>
+    public string Keywords { get; set; } = "";
+}
+
 public class AppConfig
 {
     public string Hotkey { get; set; } = HotkeyParser.DefaultHotkey;
     public bool AutoStart { get; set; }
     public int MaxResults { get; set; } = 8;
     public List<CustomEntry> Custom { get; set; } = new();
+    /// <summary>网站快捷入口（百度 / 淘宝 / GitHub 等，由用户自行添加）。</summary>
+    public List<WebSiteEntry> Websites { get; set; } = new();
 }
 
 public class UsageRec
@@ -87,6 +103,8 @@ public static class ConfigStore
                     // 用户手改 config.json 写成 "Custom": null 时，反序列化会覆盖默认值：
                     // 不补的话后续 cfg.Custom.ToArray()/Any() 全线 NRE
                     c.Custom ??= new List<CustomEntry>();
+                    // 同理：用户手改 config.json 写成 "Websites": null 也要补空列表
+                    c.Websites ??= new List<WebSiteEntry>();
                     return c;
                 }
             }

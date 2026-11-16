@@ -1,6 +1,6 @@
 ﻿namespace MiniLaunch;
 
-public enum EntrySource { Custom = 0, StartMenu = 1, Registry = 2, Uwp = 3 }
+public enum EntrySource { Custom = 0, StartMenu = 1, Registry = 2, Uwp = 3, Web = 4 }
 
 public sealed class Entry
 {
@@ -17,6 +17,7 @@ public sealed class Entry
     public string UniqueKey = "";      // 使用统计键：来源+小写名
     public string RevealPath = "";     // “打开所在位置”目标
     public bool IsFolder;              // 文件夹条目（回车进入目录，不是启动程序）
+    public bool IsWeb;                 // 网站条目（回车用默认浏览器打开网址）
 
     public static string NormName(string s) => s.Trim().ToLowerInvariant();
 
@@ -25,12 +26,16 @@ public sealed class Entry
 
 public static class EntryMerger
 {
-    /// <summary>按优先级合并：自定义 > 开始菜单 > 注册表 > UWP，按规范化名称去重。</summary>
-    public static List<Entry> Merge(List<Entry> custom, List<Entry> startMenu, List<Entry> registry, List<Entry> uwp)
+    /// <summary>按优先级合并：自定义 > 网站 > 开始菜单 > 注册表 > UWP，按规范化名称去重。</summary>
+    public static List<Entry> Merge(List<Entry> custom, List<Entry> startMenu, List<Entry> registry, List<Entry> uwp,
+        List<Entry>? web = null)
     {
         var byName = new HashSet<string>();
-        var result = new List<Entry>(custom.Count + startMenu.Count + registry.Count + uwp.Count);
+        var result = new List<Entry>(custom.Count + startMenu.Count + registry.Count + uwp.Count + (web?.Count ?? 0));
         foreach (var e in custom) { if (byName.Add(Entry.NormName(e.Name))) result.Add(e); }
+        // 网站是用户显式配置的，优先级高于扫描出来的开始菜单/注册表条目
+        if (web != null)
+            foreach (var e in web) { if (byName.Add(Entry.NormName(e.Name))) result.Add(e); }
         foreach (var e in startMenu) { if (byName.Add(Entry.NormName(e.Name))) result.Add(e); }
         foreach (var e in registry) { if (byName.Add(Entry.NormName(e.Name))) result.Add(e); }
         foreach (var e in uwp) { if (byName.Add(Entry.NormName(e.Name))) result.Add(e); }
