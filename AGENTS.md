@@ -92,9 +92,19 @@ sha256sum publish/win-x64/MiniLaunch.exe
 
 ## 应用图标
 
-- 图标源文件 `MiniLaunch/app.ico`（10 个尺寸：16~256，≤128 为 32 位 BMP，256 为 PNG），
-  由 `tools/make_icon.py` 用 Pillow 离线生成（**改图标只改脚本再重跑**，不要手改 .ico）：
-  `python tools/make_icon.py` → 重新生成 `MiniLaunch/app.ico` + `tools/icon-preview.png` + `tools/icon-sizes.png`。
+- **图标源在 `newIcon/`**（美术维护）：
+  `newIcon/MiniLaunch-icon-final.svg`（1024×1024 母版，内嵌 PNG base64）与
+  `newIcon/MiniLaunch-icon-final.ico`（同源多尺寸 ICO，各帧即母版的 LANCZOS 缩放）。
+  **改图标 = 换 newIcon 下的源文件 → 重跑脚本**，不要手改 `app.ico`。
+- `MiniLaunch/app.ico`（10 个尺寸：16~256，≤128 为 32 位 BMP，256 为 PNG）由 `tools/make_icon.py`
+  离线生成：`python tools/make_icon.py` → 重新生成 `MiniLaunch/app.ico` + `tools/icon-preview.png` +
+  `tools/icon-sizes.png`（浅底/深底两行，看边缘是否干净）。依赖 Pillow + numpy（仅开发机）。
+- **坑：母版是「不透明」的**，底层是一整块方形近黑蓝画布（`#010514`），上面才是圆角深蓝 tile。
+  直接缩放会得到**方形黑底**，必须先抠底（脚本已自动做，改脚本时别把这步删了）：
+  ①检测 tile 包围盒 + 圆角半径（蓝通道阈值 + 左上角「内缩量 vs 深度」拟合 r）
+  → ②圆角矩形算覆盖率 c（4× 超采样）→ ③母版是画在平底色上的
+  `观测色 = 底色×(1-c) + tile色×c`，用 c **反解 tile 真色**，否则透明后边缘留一圈黑边
+  → ④裁到 tile 边界（满幅方案 B），再放进正方形画布（tile 837×824，竖向居中补透明）。
 - 注入方式：csproj 的 `<ApplicationIcon>app.ico</ApplicationIcon>` → csc 以 `/win32icon` 嵌入程序集
   （`RT_GROUP_ICON` 的资源 ID 固定 **32512**）→ SDK 的 `CreateAppHost` 再把它复制进 exe。
 - 运行时取图标：`AppIcon.Load()` 用 `LoadImageW(GetModuleHandle(null), 32512, IMAGE_ICON)`；
@@ -103,6 +113,8 @@ sha256sum publish/win-x64/MiniLaunch.exe
   并**丢弃图标资源**（PE 里只剩 RCDATA/VERSION/MANIFEST）；不开 R2R 则图标正常。
   本项目 R2R 收益很小（常驻进程，热键唤醒不走启动路径），所以发布命令不带 R2R。
   `--selftest` 里有「应用图标：exe 模块资源可加载」断言，发布配置回归时会第一时间报红。
+- **坑**：替换 `publish/win-x64/MiniLaunch.exe` 时若启动器正在运行，文件会被占用
+  （`Device or resource busy`）→ 先 `Stop-Process MiniLaunch`，替换完再重新启动。
 
 ## 目录
 
