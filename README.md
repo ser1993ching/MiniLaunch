@@ -17,7 +17,7 @@ Native Win32 self-drawn UI · Zero NuGet packages · Zero reflection · **0% CPU
   <img src="https://img.shields.io/badge/memory-15.2MB-brightgreen" alt="15.2 MB private memory" />
   <img src="https://img.shields.io/badge/NuGet_deps-0-brightgreen" alt="Zero NuGet dependencies" />
   <img src="https://img.shields.io/badge/reflection-none-brightgreen" alt="Zero reflection" />
-  <img src="https://img.shields.io/badge/exe-11.8MB-blue" alt="11.8 MB single file" />
+  <img src="https://img.shields.io/badge/exe-12.1MB-blue" alt="12.1 MB single file" />
   <img src="https://img.shields.io/badge/UI-pure_Win32_P%2FInvoke-0078D4" alt="Pure Win32 P/Invoke" />
   <img src="https://img.shields.io/badge/platform-Windows_10%2B-0078D4" alt="Windows 10+" />
   <img src="https://img.shields.io/badge/language-C%23-239120" alt="C#" />
@@ -51,7 +51,7 @@ The table below shows **measured numbers** (Windows 10/11, Release self-containe
 | 工作集（含共享运行时页） | Working set (incl. shared runtime pages) | 50.6 MB，10 秒内**零增长** | 50.6 MB, **zero growth** over 10 s |
 | 线程数 | Threads | 15 | 15 |
 | 句柄数 | Handles | 423 | 423 |
-| 可执行文件体积 | Executable size | **11.8 MB**（自包含 + 裁剪，单文件） | **11.8 MB** (self-contained + trimmed, single file) |
+| 可执行文件体积 | Executable size | **12.1 MB**（自包含 + 裁剪，单文件） | **12.1 MB** (self-contained + trimmed, single file) |
 | 无 UI 纯逻辑进程 | Headless process (self-test) | **1.3 MB** 工作集 | **1.3 MB** working set |
 
 #### 是怎么做到的 / How it stays small
@@ -99,7 +99,7 @@ The table below shows **measured numbers** (Windows 10/11, Release self-containe
 | **四路来源聚合** | Multi-source aggregation | 自定义条目 > 开始菜单 > 注册表卸载项 > UWP 商店应用，按小写名称去重合并 |
 | **图标缓存** | Icon cache | 图标在**后台线程**提取，UI 绘制只读缓存；LRU 保留 64 项 HICON，驱逐时销毁 |
 | **拖放添加** | Drag & drop | 把 exe / 快捷方式拖进窗口，立即添加为自定义条目并持久化 |
-| **文件夹快速启动** | Folder shortcuts | 托盘菜单「添加文件夹…」选目录并起名，回车直接进目录；常用文件夹在空查询时置顶 |
+| **文件夹快速启动** | Folder shortcuts | 托盘菜单「添加文件夹…」选目录并起名，回车直接进目录；使用次数相同时，文件夹快捷入口优先显示 |
 | **网站快速访问** | Website shortcuts | 托盘菜单「添加网站…」自定义常用网址（名称 + 网址，回车用默认浏览器打开）；窗口底部以 tag 形式列出已添加的网站（点标签编辑，点 × 删除）；支持名称 / 拼音 / 域名搜索 |
 | **使用频率排序** | Usage-based ranking | 最近 24 小时用过的条目额外加权，常用程序自然浮到前面 |
 | **托盘菜单** | Tray menu | 设置热键 / 添加程序 / 重新扫描 / 开机自启 / 退出 |
@@ -157,6 +157,16 @@ The table covers all 6763 GB2312 characters and is generated offline by `tools/m
 python tools/make_pinyin.py    # → MiniLaunch/src/PinyinTable.g.cs（位图 2613 B + 9bit 索引 7609 B + 音节表 1692 B ≈ 11.9 KB）
 ```
 
+应用图标同样离线生成（母版在 `newIcon/`，脚本会**自动抠掉母版的方形底色**，输出真·透明圆角）：
+
+```bash
+python tools/make_icon.py    # → MiniLaunch/app.ico（16~256，≤128 为 32 位 BMP、256 为 PNG）
+                           #   + tools/icon-preview.png + tools/icon-sizes.png
+```
+
+换图标只需替换 `newIcon/` 下的母版（`MiniLaunch-icon-final.svg` / `.ico`）并重跑上面的命令，**不要手改 `app.ico`**。
+The app icon is generated offline as well: the 1024 master lives in `newIcon/`, and the script strips the master's opaque square backdrop so the corners are truly transparent.
+
 <p align="center">
   <img src="docs/screenshots/main-pinyin.png" width="520" alt="Pinyin search" />
 </p>
@@ -195,12 +205,13 @@ Bottom: the *Add website…* dialog — name + URL, with the already-added websi
 
 | 版本 | 说明 |
 | --- | --- |
-| **1.6（当前）** | 第二轮全面审查修复（扫描/退出/配置/自启）+ 输入框缺角修复 + 文件夹标签行；自检 155 项 |
+| **1.7（当前）** | 新版应用图标：深蓝圆角底 + 冰白放大镜 + 青色右箭头（真·透明圆角，自动抠掉母版的方形底色）；图标源独立到 `newIcon/`；自检 155 项 |
+| 1.6（历史版本） | 第二轮全面审查修复（扫描/退出/配置/自启）+ 输入框缺角修复 + 文件夹标签行；自检 155 项 |
 | 1.5（历史版本） | 新增网站快速访问等；自检 127 项 |
 | 1.4（历史版本） | 拼音搜索（全字集）；自检 96 项 |
 | 1.3 / 1.2 / 1.1 / 1.0（历史版本） | 呼出排序、文件夹快速启动、首个公开版本 —— **旧版本不会被删除**，始终可在 Releases 页面翻到 |
 
-> 每次推送版本标签（`git push origin 1.6`）都会由 GitHub Actions 自动构建、自检并把
+> 每次推送版本标签（`git push origin 1.7`）都会由 GitHub Actions 自动构建、自检并把
 > `MiniLaunch.exe` 挂到该标签的 Release 上，无需手工上传。
 > Windows 运行时会弹出「已保护你的电脑」蓝色窗口 —— 点 **更多信息 → 仍要运行** 即可。
 
@@ -231,11 +242,11 @@ dotnet build
 ./artifacts/bin/MiniLaunch/debug/MiniLaunch.exe --selftest
 ```
 
-必须**全绿**（当前基线 **127 项通过**），退出码为 `0`。每次改动后请务必执行。
-Must be **all green** (current baseline: **127 assertions passed**) with exit code `0`. Run it after every change.
+必须**全绿**（当前基线 **155 项通过**），退出码为 `0`。每次改动后请务必执行。
+Must be **all green** (current baseline: **155 assertions passed**) with exit code `0`. Run it after every change.
 
 ```
-===== 自检结果: 通过 127 / 失败 0，耗时 1441ms =====
+===== 自检结果: 通过 155 / 失败 0，耗时 1636ms =====
 当前进程工作集: 1.3 MB
 ```
 
@@ -254,7 +265,7 @@ cp artifacts/publish/MiniLaunch/release_win-x64/MiniLaunch.exe \
    "/e/code/启动器/publish/win-x64/"
 ```
 
-发布后核对：运行 `./MiniLaunch.exe --selftest`，应显示 **127 项通过**（拿到旧产物会显示 70/60/45/38）。
+发布后核对：运行 `./MiniLaunch.exe --selftest`，应显示 **155 项通过**（拿到旧产物会显示 127/96/70/60）。
 
 > 发布**不带** `PublishReadyToRun` —— SDK 的单文件打包器会重建宿主 exe 并丢弃图标资源（PE 里只剩 RCDATA/VERSION/MANIFEST）。
 > Do **not** enable `PublishReadyToRun` — the single-file bundler rebuilds the host executable and drops the embedded icon resource.
@@ -276,6 +287,7 @@ cp artifacts/publish/MiniLaunch/release_win-x64/MiniLaunch.exe \
 | 两阶段扫描 | Two-phase scanning | 开始菜单/注册表（约 30 ms）先发布；UWP 需拉 powershell（约 1.3 s），等窗口首次显示后再执行 |
 | 图标后台化 | Background icon extraction | 提取走后台线程，UI 只读缓存；**HICON 的创建/销毁只在 UI 线程**，避免绘制过程中被驱逐 |
 | UWP 缓存哨兵 | Cache sentinel | `uwp-cache.json` 写入一条空名哨兵记录扫描时间戳，否则 0 条时每次启动都会重跑 powershell |
+| 应用图标 | App icon | 1024 母版在 `newIcon/`，`tools/make_icon.py` 自动抠掉母版的方形底色后打包 16~256（≤128 为 32 位 BMP、256 为 PNG），嵌入 `RT_GROUP_ICON` 32512 |
 
 ### 目录结构 / Project layout
 
@@ -287,19 +299,33 @@ MiniLaunch/src/
   Entry.cs         条目模型与合并去重（Custom > Web > StartMenu > Registry > Uwp）
   Scanners.cs      自定义 / 网站 / 开始菜单 / 注册表 / UWP 扫描器
   WebUrl.cs        网址规范化与校验（补协议头、取域名）+ 网站条目增删改（WebSites）
-  Pinyin.cs        拼音搜索：手工别名表 + GB2312 全字集（6763 字）全拼/首字母/中段（表见 PinyinTable.g.cs，由 tools/make_pinyin.py 生成）
+  Pinyin.cs        拼音搜索：手工别名表 + GB2312 全字集（6763 字）全拼/首字母/中段
+                   （表见 PinyinTable.g.cs，由 tools/make_pinyin.py 生成）
+  PinyinTable.g.cs <auto-generated> 拼音位图 + 9bit 稠密索引 + 音节表（≈ 11.9 KB）
   Search.cs        分词 AND 匹配与打分排序
-  IconCache.cs     HICON 提取与 LRU 缓存
-  AppIcon.cs       应用图标加载（RT_GROUP_ICON）
+  IconCache.cs     HICON 提取与 LRU 缓存（后台线程提取，UI 只读缓存）
+  AppIcon.cs       应用图标加载（RT_GROUP_ICON 32512）
   Dpi.cs           DPI 感知设置与降级
   Launcher.cs      ShellExecuteEx 封装
-  Theme.cs         配色表与 GDI 绘制工具
+  Theme.cs         配色表与 GDI 绘制工具（字体/按钮布局/双缓冲/画刷缓存）
+  TagRow.cs        底部「已添加条目」标签行的共用实现（网站窗 / 文件夹名称窗）
   MainWindow.cs    主窗口（无边框自绘 + 原生 EDIT 子类化 + 拖放 + 右键菜单）
   HotkeyDialog.cs  热键录制小窗
-  WebDialog.cs     网站编辑小窗（名称 / 网址 / 关键词 + 常用站点快捷标签）
+  NameDialog.cs    名称输入小窗（文件夹快捷入口起名 / 重命名）
+  WebDialog.cs     网站编辑小窗（名称 / 网址 + 底部已添加网站标签行）
+  FolderPicker.cs  shell 文件夹 / 文件选择对话框（IFileDialog 手工 vtable）
+  AutoStart.cs     开机自启（HKCU Run 写入后回读校验 + 启动自愈）
   Tray.cs          托盘菜单
   NativeOut.cs     管道 stdout 输出（WinExe 无控制台）
-  SelfTest.cs      --selftest 全部断言
+  SelfTest.cs      --selftest 全部断言（当前 155 项）
+
+newIcon/           图标母版（1024 SVG + 同源 ICO，美术维护；脚本自动抠掉方形底色）
+tools/
+  make_icon.py     生成 app.ico + icon-preview.png + icon-sizes.png
+  make_pinyin.py   生成 PinyinTable.g.cs（离线依赖 pypinyin）
+  shot.ps1 / rows.py  窗口截图（PrintWindow）/ 像素校验行对齐
+  gitee_release.py Gitee Release 上传（私人令牌）
+  push-all.sh / install-autopush-hook.sh  手动/自动双远端推送
 ```
 
 ### 运行时数据 / Runtime data
@@ -329,7 +355,7 @@ A：托盘菜单「添加网站…」，填名称与网址（只填 `www.baidu.c
 A：UWP 列表来自 `Get-StartApps`（powershell），有 7 天磁盘缓存。开机自启常驻时该扫描会推迟到窗口首次显示之后执行，属于正常行为。
 
 **Q：为什么发布产物比预期大 / 图标丢了？**
-A：确认没有开启 `PublishReadyToRun`，并确认用的是**最新**产物（`--selftest` 显示 70 项而不是 60/45/38）。
+A：确认没有开启 `PublishReadyToRun`，并确认用的是**最新**产物（`--selftest` 显示 155 项而不是 127/96/70/60）。
 
 ---
 
@@ -337,7 +363,9 @@ A：确认没有开启 `PublishReadyToRun`，并确认用的是**最新**产物�
 
 | 版本 | 发布日期 | 内容 |
 | --- | --- | --- |
-| **1.5** | 2026-11-16 | 新增**网站快速访问**：托盘「添加网站…」自定义常用网址，回车用默认浏览器打开；列表带地球图标与「网站」标记，支持名称/拼音/域名搜索，右键可编辑或删除；编辑窗底部以 tag 形式列出已添加的网站（点标签编辑、点 × 删除）。同时移除条目上的「关键词」属性（搜索靠名称/拼音/路径），并修复自绘小窗被主窗口遮挡、输入框文字未垂直居中的问题。自检 127 项。 |
+| **1.7** | 2026-11-17 | **全新应用图标**：深蓝圆角底 + 冰白放大镜 + 青色右向箭头。图标源独立到 `newIcon/`（1024 母版），`tools/make_icon.py` 改为「取源 → 抠底 → 打包」：自动检测圆角几何、算覆盖率反解真实底色，**去掉母版自带的方形黑底**，四角为真透明圆角；重新打包 16~256 共 10 个尺寸（≤128 为 32 位 BMP、256 为 PNG）。自检 155 项。 |
+| **1.6** | 2026-11-16 | 第二轮全面代码审查修复：扫描重扫记账（新增/删除/改名不再被丢弃）、选目录僵尸进程（消息泵不再吞 WM_QUIT）、`config.json` 空字段崩溃、开机自启指向构建目录、开始菜单无限递归、UAC 提权卡界面；界面侧修复输入框「缺角」与文字垂直居中，新增「已添加的文件夹」标签行（最多 4 行 + 未显示提示）。自检 155 项。 |
+| 1.5 | 2026-11-16 | 新增**网站快速访问**：托盘「添加网站…」自定义常用网址，回车用默认浏览器打开；列表带地球图标与「网站」标记，支持名称/拼音/域名搜索，右键可编辑或删除；编辑窗底部以 tag 形式列出已添加的网站（点标签编辑、点 × 删除）。同时移除条目上的「关键词」属性（搜索靠名称/拼音/路径），并修复自绘小窗被主窗口遮挡、输入框文字未垂直居中的问题。自检 127 项。 |
 | 1.4 | 2026-11-15 | 新增**拼音搜索（全字集）**：GB2312 6763 字全拼/首字母/中段命中；呼出排序改为使用次数优先。自检 96 项。 |
 | 1.3 | 2026-11-15 | 呼出排序改为使用次数优先（文件夹不再无条件置顶），构建产物收进仓库内 artifacts。自检 82 项。 |
 | 1.2 | 2026-11-14 | 修复发布版文件夹选择退化为旧树形窗（裁剪使 ComImport 封送失效）。自检 70 项。 |
@@ -379,7 +407,7 @@ Pure Win32 self-drawn UI · Zero NuGet packages · Zero reflection · **0% CPU w
   <img src="https://img.shields.io/badge/idle_CPU-0.000%25-brightgreen" alt="0.000% idle CPU" />
   <img src="https://img.shields.io/badge/memory-15.2MB-brightgreen" alt="15.2 MB private memory" />
   <img src="https://img.shields.io/badge/NuGet_deps-0-brightgreen" alt="Zero NuGet dependencies" />
-  <img src="https://img.shields.io/badge/exe-11.8MB-blue" alt="11.8 MB single file" />
+  <img src="https://img.shields.io/badge/exe-12.1MB-blue" alt="12.1 MB single file" />
 </p>
 
 </div>
@@ -409,11 +437,11 @@ Press `Ctrl+Space`, type a few characters, hit `Enter`. Everything else is delib
 | --- | --- |
 | Global hotkey | Defaults to `Ctrl+Space`; re-recordable from the tray menu, applies immediately without a restart |
 | Fuzzy search | Space-separated tokens combined with **AND**; name prefix (100) > name contains (80−offset) > alias/path (55), plus a usage-frequency boost |
-| Pinyin aliases | A curated table of Chinese app abbreviations — `wx` matches 「微信」 without shipping a full pinyin dictionary |
+| Pinyin search | The full GB2312 character set (6763 chars) is embedded: full pinyin (`qidongqi`), initials (`qdq`) and any middle segment (`hy` → 腾讯会议) all match Chinese names, plus a curated alias table (`wx` → 微信). No NuGet, no runtime dependency |
 | Four-source aggregation | Custom entries > Start Menu > Registry uninstall keys > UWP apps, de-duplicated by lowercase name |
 | Icon cache | Icons are extracted on a **background thread**; the UI only reads the cache. LRU of 64 HICONs, destroyed on eviction |
 | Drag & drop | Drop an `.exe` or a shortcut onto the window to add a custom entry |
-| Folder shortcuts | Tray menu → *Add folder…* picks a directory and names it; Enter opens it directly, and pinned folders stay on top of an empty query |
+| Folder shortcuts | Tray menu → *Add folder…* picks a directory and names it; Enter opens it directly, and folder shortcuts get priority among equally-used entries |
 | Website shortcuts | Tray menu → *Add website…* stores your own shortcuts (name + URL); Enter opens them in the default browser. The dialog lists your existing sites as tags at the bottom (click to edit, × to delete), and they are searchable by name, pinyin or domain |
 | Usage ranking | Apps used in the last 24 hours get an extra boost and float to the top |
 | Tray menu | Set hotkey / Add app / Rescan / Start with Windows / Quit |
@@ -427,7 +455,7 @@ Press `Ctrl+Space`, type a few characters, hit `Enter`. Everything else is delib
 | **Private memory (resident)** | **15.2 MB** |
 | Working set (incl. shared runtime pages) | 50.6 MB — **zero growth** over 10 s |
 | Threads / Handles | 15 / 423 |
-| Executable size | **11.8 MB** (self-contained + trimmed, single file) |
+| Executable size | **12.1 MB** (self-contained + trimmed, single file) |
 | Headless process (self-test) | **1.3 MB** working set |
 
 > Measured on Windows 10/11 with the Release self-contained trimmed build.
@@ -439,8 +467,12 @@ Press `Ctrl+Space`, type a few characters, hit `Enter`. Everything else is delib
 # build (Debug / JIT is enough for day-to-day work)
 cd MiniLaunch && dotnet build
 
-# headless self-test — must be all green (baseline: 127 assertions), exit code 0
+# headless self-test — must be all green (baseline: 155 assertions), exit code 0
 ./artifacts/bin/MiniLaunch/debug/MiniLaunch.exe --selftest
+
+# regenerate the app icon from the 1024 master in newIcon/ (strips the master's
+# opaque square backdrop, so the corners are truly transparent)
+python tools/make_icon.py
 
 # publish a self-contained, trimmed single file (output: artifacts/publish/MiniLaunch/release_win-x64/)
 dotnet publish MiniLaunch/MiniLaunch.csproj -c Release -r win-x64 --self-contained \
@@ -460,5 +492,6 @@ Windows 10 1607+ / Windows 11. Windows 7 and 8.1 are not supported (the .NET 8 r
 - High-version APIs (`SetProcessDpiAwarenessContext`, `GetDpiForWindow`) are probed and gracefully downgraded so older systems never crash.
 - Scanning runs in two phases: Start Menu + Registry (~30 ms) publish immediately, while UWP (which needs PowerShell, ~1.3 s) waits until the window has been shown for the first time.
 - Icon `HICON`s are created and destroyed **only on the UI thread**, so a cache eviction can never pull an icon out from under a paint operation.
+- The app icon is generated offline from a 1024 master in `newIcon/`: the script detects the rounded-rect geometry, computes a per-pixel coverage mask and un-mixes the master's opaque square backdrop, so the shipped icon has genuinely transparent corners (16–256 px, embedded as `RT_GROUP_ICON` 32512).
 
 See [`AGENTS.md`](AGENTS.md) for the full design rationale, the engineering conventions and the "pitfalls" list. The internal design documents (`方案.md` / `详细计划.md` / `审查记录.md`) are kept locally and are not published in this repository.
